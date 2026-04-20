@@ -1,0 +1,273 @@
+---
+title: "Data schema reference for all five Parquet files"
+description: "Complete field definitions for orderfilled, trades, markets, quant, and users Parquet files — types, units, and descriptions for every column."
+---
+
+Each Parquet file in the dataset serves a distinct purpose in the analysis pipeline. This page documents every field in every file, including units, value ranges, and how fields relate across files.
+
+<Note>
+  All five files use Snappy compression. Amounts that originate from on-chain data (fees, raw filled amounts) are stored in wei (10⁻⁶ USDC precision) in `orderfilled.parquet`, but are already normalized by 10⁶ in all downstream files.
+</Note>
+
+## orderfilled.parquet
+
+Raw OrderFilled events decoded directly from Polygon blockchain logs. Every record corresponds to one on-chain `OrderFilled` event from either of the two official Polymarket exchange contracts.
+
+<Expandable title="Fields" defaultOpen={true}>
+  <ResponseField name="timestamp" type="int">
+    Unix timestamp of the block that contained this event.
+  </ResponseField>
+  <ResponseField name="block_number" type="int">
+    Polygon block number. Use this to join with external block-level data or to verify ordering.
+  </ResponseField>
+  <ResponseField name="transaction_hash" type="str">
+    Hex-encoded transaction hash. Unique per transaction; multiple OrderFilled events can share the same hash if they appear in the same transaction.
+  </ResponseField>
+  <ResponseField name="contract" type="str">
+    Name of the exchange contract that emitted the event. Either `CTF_EXCHANGE` or `NEGRISK_CTF_EXCHANGE`.
+  </ResponseField>
+  <ResponseField name="maker" type="str">
+    Checksum wallet address of the order maker (the party who placed the limit order).
+  </ResponseField>
+  <ResponseField name="taker" type="str">
+    Checksum wallet address of the order taker (the party who filled the limit order). May be a contract address for automated fills.
+  </ResponseField>
+  <ResponseField name="maker_asset_id" type="str">
+    Asset ID of what the maker provided. A value of `"0"` means USDC; any other value is the numeric token ID of an outcome token.
+  </ResponseField>
+  <ResponseField name="taker_asset_id" type="str">
+    Asset ID of what the taker provided. A value of `"0"` means USDC; any other value is a numeric outcome token ID.
+  </ResponseField>
+  <ResponseField name="maker_amount_filled" type="int">
+    Amount filled by the maker, in wei (raw on-chain units; divide by 10⁶ for USDC).
+  </ResponseField>
+  <ResponseField name="taker_amount_filled" type="int">
+    Amount filled by the taker, in wei (divide by 10⁶ for USDC).
+  </ResponseField>
+  <ResponseField name="maker_fee" type="int">
+    Fee charged to the maker, in wei.
+  </ResponseField>
+  <ResponseField name="taker_fee" type="int">
+    Fee charged to the taker, in wei.
+  </ResponseField>
+  <ResponseField name="protocol_fee" type="int">
+    Protocol-level fee for the trade, in wei.
+  </ResponseField>
+  <ResponseField name="order_hash" type="str">
+    Unique hash of the maker's order. Use this to deduplicate partial fills or trace an order across multiple transactions.
+  </ResponseField>
+</Expandable>
+
+## trades.parquet
+
+Processed trades that join `orderfilled.parquet` with `markets.parquet` via token ID lookup. Amounts are normalized (divided by 10⁶). This is the primary intermediate file used to derive `quant.parquet` and `users.parquet`.
+
+<Expandable title="Fields" defaultOpen={true}>
+  <ResponseField name="timestamp" type="int">
+    Unix timestamp of the block.
+  </ResponseField>
+  <ResponseField name="datetime" type="str">
+    Formatted datetime string (`YYYY-MM-DD HH:MM:SS`).
+  </ResponseField>
+  <ResponseField name="block_number" type="int">
+    Polygon block number.
+  </ResponseField>
+  <ResponseField name="transaction_hash" type="str">
+    Hex-encoded transaction hash.
+  </ResponseField>
+  <ResponseField name="contract" type="str">
+    Exchange contract name: `CTF_EXCHANGE` or `NEGRISK_CTF_EXCHANGE`.
+  </ResponseField>
+  <ResponseField name="event_id" type="str">
+    Parent event identifier from the Gamma API.
+  </ResponseField>
+  <ResponseField name="event_slug" type="str">
+    URL-friendly slug of the parent event.
+  </ResponseField>
+  <ResponseField name="event_title" type="str">
+    Human-readable title of the parent event.
+  </ResponseField>
+  <ResponseField name="market_id" type="str">
+    Polymarket market identifier, auto-linked from the non-USDC asset ID via the token mapping table.
+  </ResponseField>
+  <ResponseField name="condition_id" type="str">
+    On-chain condition ID for the market.
+  </ResponseField>
+  <ResponseField name="question" type="str">
+    Market question text (truncated to 100 characters).
+  </ResponseField>
+  <ResponseField name="nonusdc_side" type="str">
+    Which side of the market the outcome token belongs to: `"token1"` (YES) or `"token2"` (NO).
+  </ResponseField>
+  <ResponseField name="maker" type="str">
+    Wallet address of the order maker.
+  </ResponseField>
+  <ResponseField name="taker" type="str">
+    Wallet address of the order taker.
+  </ResponseField>
+  <ResponseField name="maker_asset" type="str">
+    Asset label for the maker's side: `"USDC"`, `"token1"`, or `"token2"`.
+  </ResponseField>
+  <ResponseField name="taker_asset" type="str">
+    Asset label for the taker's side: `"USDC"`, `"token1"`, or `"token2"`.
+  </ResponseField>
+  <ResponseField name="maker_direction" type="str">
+    Trading direction for the maker: `"BUY"` or `"SELL"`.
+  </ResponseField>
+  <ResponseField name="taker_direction" type="str">
+    Trading direction for the taker: `"BUY"` or `"SELL"`.
+  </ResponseField>
+  <ResponseField name="price" type="float">
+    Implied trade price as USDC per outcome token, ranging from 0 to 1 (rounded to 6 decimal places).
+  </ResponseField>
+  <ResponseField name="usd_amount" type="float">
+    USDC value of the trade, normalized — divided by 10⁶ (rounded to 2 decimal places).
+  </ResponseField>
+  <ResponseField name="token_amount" type="float">
+    Number of outcome tokens traded, normalized — divided by 10⁶ (rounded to 2 decimal places).
+  </ResponseField>
+  <ResponseField name="asset_id" type="str">
+    The non-USDC token ID used to look up market metadata.
+  </ResponseField>
+  <ResponseField name="order_hash" type="str">
+    Unique hash of the maker's order.
+  </ResponseField>
+</Expandable>
+
+## markets.parquet
+
+Market metadata fetched from the Gamma API. Use this file to filter by market question, link trades to events, or look up outcome token identifiers. The join key to trade files is `id` (matches `market_id` in `trades.parquet`, `quant.parquet`, and `users.parquet`).
+
+<Expandable title="Fields" defaultOpen={true}>
+  <ResponseField name="id" type="str">
+    Polymarket market ID. Join to `market_id` in the trade files.
+  </ResponseField>
+  <ResponseField name="question" type="str">
+    Human-readable question text for the market (e.g., `"Will X happen before Y?"`).
+  </ResponseField>
+  <ResponseField name="answer1" type="str">
+    Name of the first outcome, typically `"YES"`.
+  </ResponseField>
+  <ResponseField name="answer2" type="str">
+    Name of the second outcome, typically `"NO"`.
+  </ResponseField>
+  <ResponseField name="token1" type="str">
+    CLOB token ID of the first outcome (YES). Used as the join key in `load_token_mapping`.
+  </ResponseField>
+  <ResponseField name="token2" type="str">
+    CLOB token ID of the second outcome (NO).
+  </ResponseField>
+  <ResponseField name="condition_id" type="str">
+    On-chain condition ID for the market.
+  </ResponseField>
+  <ResponseField name="neg_risk" type="bool">
+    Whether this is a neg-risk augmented market.
+  </ResponseField>
+  <ResponseField name="slug" type="str">
+    URL-friendly slug for this market.
+  </ResponseField>
+  <ResponseField name="volume" type="str">
+    Cumulative trading volume as reported by the Gamma API.
+  </ResponseField>
+  <ResponseField name="closed" type="bool">
+    Whether the market is closed (resolved or expired).
+  </ResponseField>
+  <ResponseField name="active" type="bool">
+    Whether the market is currently active and accepting trades.
+  </ResponseField>
+  <ResponseField name="archived" type="bool">
+    Whether the market has been archived.
+  </ResponseField>
+  <ResponseField name="end_date" type="str">
+    Expected or actual end date of the market.
+  </ResponseField>
+  <ResponseField name="outcome_prices" type="str">
+    JSON-serialized list of final outcome prices (e.g., `"[1.0, 0.0]"` for a resolved YES market).
+  </ResponseField>
+  <ResponseField name="event_id" type="str">
+    Parent event identifier. Multiple markets can belong to the same event.
+  </ResponseField>
+  <ResponseField name="event_slug" type="str">
+    URL-friendly slug for the parent event.
+  </ResponseField>
+  <ResponseField name="event_title" type="str">
+    Human-readable title of the parent event.
+  </ResponseField>
+</Expandable>
+
+## quant.parquet
+
+Clean, analysis-ready trade data. All trades are normalized to the YES token (token1) perspective: if a trade involved the NO token, the price is flipped to `1 - price`. Contract-address trades (where the taker is an exchange contract) are removed. Best for market analysis, price studies, and time-series forecasting.
+
+<Expandable title="Fields" defaultOpen={true}>
+  <ResponseField name="transaction_hash" type="str">
+    Blockchain transaction hash.
+  </ResponseField>
+  <ResponseField name="block_number" type="int">
+    Polygon block number.
+  </ResponseField>
+  <ResponseField name="datetime" type="datetime">
+    Human-readable timestamp derived from the block timestamp (`YYYY-MM-DD HH:MM:SS`).
+  </ResponseField>
+  <ResponseField name="market_id" type="str">
+    Market identifier. Join with `markets.parquet` on `id` to get question text and event metadata.
+  </ResponseField>
+  <ResponseField name="maker" type="str">
+    Wallet address of the order maker.
+  </ResponseField>
+  <ResponseField name="taker" type="str">
+    Wallet address of the order taker.
+  </ResponseField>
+  <ResponseField name="token_amount" type="float">
+    Number of YES tokens traded.
+  </ResponseField>
+  <ResponseField name="usd_amount" type="float">
+    USDC value of the trade.
+  </ResponseField>
+  <ResponseField name="price" type="float">
+    Trade price in the YES token perspective, ranging from 0 to 1. Prices closer to 1 indicate higher implied probability of YES.
+  </ResponseField>
+</Expandable>
+
+## users.parquet
+
+Per-user trade records. Each row in `trades.parquet` becomes two rows here — one for the maker and one for the taker. All directions are unified to BUY: selling is represented as a negative `token_amount`. Records are sorted by user address and then by timestamp to support fast wallet-level queries and PnL calculations.
+
+<Expandable title="Fields" defaultOpen={true}>
+  <ResponseField name="transaction_hash" type="str">
+    Transaction hash. Use this to join back to `quant.parquet` or `trades.parquet` for the full trade record.
+  </ResponseField>
+  <ResponseField name="block_number" type="int">
+    Polygon block number.
+  </ResponseField>
+  <ResponseField name="datetime" type="datetime">
+    Human-readable timestamp (`YYYY-MM-DD HH:MM:SS`).
+  </ResponseField>
+  <ResponseField name="market_id" type="str">
+    Market identifier. Join with `markets.parquet` on `id`.
+  </ResponseField>
+  <ResponseField name="user" type="str">
+    Wallet address of the user this record describes (either the maker or the taker of the original trade).
+  </ResponseField>
+  <ResponseField name="role" type="str">
+    Whether this user was the `"maker"` or `"taker"` in the original trade.
+  </ResponseField>
+  <ResponseField name="token_amount" type="float">
+    Signed token quantity. Positive values indicate a buy; negative values indicate a sell. All amounts are in YES token units after normalization.
+  </ResponseField>
+  <ResponseField name="usd_amount" type="float">
+    USDC value of the trade (always positive regardless of direction).
+  </ResponseField>
+  <ResponseField name="price" type="float">
+    Trade price in the YES token perspective, ranging from 0 to 1.
+  </ResponseField>
+</Expandable>
+
+<CardGroup cols={2}>
+  <Card title="Dataset overview" icon="chart-bar" href="/dataset/overview">
+    File sizes, record counts, and pipeline diagram.
+  </Card>
+  <Card title="Download" icon="download" href="/dataset/download">
+    Download individual files or the full 107 GB dataset from HuggingFace.
+  </Card>
+</CardGroup>

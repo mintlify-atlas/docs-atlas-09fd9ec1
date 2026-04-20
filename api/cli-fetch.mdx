@@ -1,0 +1,147 @@
+---
+title: "fetch-onchain and fetch-markets CLI commands"
+description: "Reference for fetch-onchain, fetch-markets, and update-markets commands: flags, checkpoint behavior, session file naming, and usage examples."
+---
+
+These three commands bring external data into your local Parquet files. `fetch-onchain` reads OrderFilled events directly from the Polygon blockchain, `fetch-markets` pulls market metadata from the Gamma API, and `update-markets` refreshes the status of markets that have not yet resolved.
+
+---
+
+## fetch-onchain
+
+Fetches `OrderFilled` events from the Polygon blockchain and writes them to a timestamped session file (`orderfilled_session_YYYYMMDD_HHMMSS.parquet`). You must supply exactly one of `--blocks`, `--range`, or `--continue`.
+
+```bash
+python -m polymarket.cli fetch-onchain [flags]
+```
+
+### Flags
+
+<ParamField path="-b" type="integer">
+  Fetch the last N blocks from the current chain head. Maximum value: 1,000,000.
+
+  Short form: `-b` — Long form: `--blocks`
+</ParamField>
+
+<ParamField path="-r" type="integer integer">
+  Fetch a specific block range. Provide two integers: `START END`. The range must not exceed 1,000,000 blocks.
+
+  Short form: `-r` — Long form: `--range`
+</ParamField>
+
+<ParamField path="-c" type="boolean">
+  Resume from the last saved checkpoint. The CLI reads `state.json` and starts from `fetch_onchain.last_block + 1`, continuing to the current chain head.
+
+  Short form: `-c` — Long form: `--continue`
+</ParamField>
+
+<ParamField path="-a" type="boolean">
+  Use the Alchemy RPC endpoint instead of the default public Polygon RPC. Requires the `ALCHEMY_API_KEY` environment variable to be set.
+
+  Short form: `-a` — Long form: `--alchemy`
+</ParamField>
+
+<ParamField path="-m" type="boolean">
+  After fetching completes, merge the session file into the main `orderfilled.parquet`. Without this flag, the session file is left in place for you to merge later with `merge-sessions`.
+
+  Short form: `-m` — Long form: `--merge`
+</ParamField>
+
+### Checkpoint behavior
+
+The CLI saves your progress to `state.json` after every 1,000 blocks (10 batches of 100 blocks). The relevant key is `fetch_onchain.last_block`. If the process is interrupted, pass `--continue` on the next run to resume from exactly where it stopped.
+
+Blocks that fail due to RPC errors are recorded in `data/failed_blocks_YYYYMMDD_HHMMSS.txt`. Use `refetch_failed_blocks` to re-fetch them later.
+
+### Session files
+
+Each invocation writes to a new session file rather than appending directly to the main file:
+
+```
+data/dataset/orderfilled_session_YYYYMMDD_HHMMSS.parquet
+data/dataset/trades_session_YYYYMMDD_HHMMSS.parquet
+data/data_clean/quant_session_YYYYMMDD_HHMMSS.parquet
+data/data_clean/users_session_YYYYMMDD_HHMMSS.parquet
+```
+
+Run `merge-sessions` (or pass `--merge`) to consolidate these into the main files.
+
+### Examples
+
+```bash
+# Fetch the most recent 5,000 blocks
+python -m polymarket.cli fetch-onchain --blocks 5000
+
+# Resume from the last checkpoint
+python -m polymarket.cli fetch-onchain --continue
+
+# Resume using Alchemy for faster RPC access, then merge session files
+python -m polymarket.cli fetch-onchain --continue --alchemy --merge
+
+# Fetch a specific block range
+python -m polymarket.cli fetch-onchain --range 80000000 80010000
+```
+
+---
+
+## fetch-markets
+
+Incrementally fetches new markets from the Gamma API and appends them to `markets.parquet`. The command stops automatically once it encounters three consecutive batches of already-known markets, so repeated runs are safe and efficient.
+
+```bash
+python -m polymarket.cli fetch-markets [flags]
+```
+
+### Flags
+
+<ParamField path="-c" type="boolean">
+  Resume from the last API offset saved in `state.json` (`fetch_markets.last_offset`). Use this if a previous run was interrupted mid-fetch.
+
+  Short form: `-c` — Long form: `--continue`
+</ParamField>
+
+### Examples
+
+```bash
+# Fetch all new markets since the last run
+python -m polymarket.cli fetch-markets
+
+# Resume an interrupted fetch from the last offset
+python -m polymarket.cli fetch-markets --continue
+```
+
+<Note>
+  Run `fetch-markets` before `fetch-onchain` or `process` so that the token-to-market mapping is up to date. The `update` command handles this ordering automatically.
+</Note>
+
+---
+
+## update-markets
+
+Updates the status of markets that are not yet marked as closed or resolved. This command loads `markets.parquet` in full, queries the Gamma API for each unresolved market, and writes the updated file back to disk. Run this infrequently — weekly is typical — because it performs one API call per unresolved market.
+
+```bash
+python -m polymarket.cli update-markets [flags]
+```
+
+### Flags
+
+<ParamField path="-c" type="boolean">
+  Resume from the last saved index in `state.json` (`update_markets.last_index`). Use this if the command was interrupted.
+
+  Short form: `-c` — Long form: `--continue`
+</ParamField>
+
+### Examples
+
+```bash
+# Update status of all unresolved markets
+python -m polymarket.cli update-markets
+
+# Resume an interrupted update run
+python -m polymarket.cli update-markets --continue
+```
+
+<Tip>
+  Progress is saved to `state.json` every 50 markets, so you can safely interrupt `update-markets` with Ctrl+C and resume later with `--continue`.
+</Tip>

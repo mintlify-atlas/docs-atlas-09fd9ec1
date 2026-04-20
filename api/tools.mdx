@@ -1,0 +1,279 @@
+---
+title: "Utility tools: merge, sort, and refetch Parquet files"
+description: "Run continuous real-time block fetching, merge or sort large Parquet files on disk, and recover data from previously failed block ranges."
+---
+
+The `tools` module contains standalone scripts for operational tasks: keeping data up to date in real time, combining session files, sorting large Parquet datasets, and retrying blocks that failed during a previous run.
+
+All tools can be invoked as Python modules from the command line. Some also expose a Python function you can call directly.
+
+---
+
+## continuous_fetch
+
+Continuously monitors the Polygon blockchain and streams new blocks into four Parquet files in real time. It switches automatically between batch mode (when catching up) and real-time mode (when at the chain tip).
+
+### Modes
+
+| Mode | Trigger | Behavior |
+|---|---|---|
+| Batch | ≥ 100 blocks behind chain tip | Fetches 100 blocks at a time, no delay between batches |
+| Real-time | < 100 blocks behind | Fetches one block, then waits 2 seconds |
+
+### Output files
+
+Each session writes four time-stamped Parquet files to the output directory:
+
+| File | Contents |
+|---|---|
+| `orderfilled_<timestamp>.parquet` | Formatted `OrderFilled` events |
+| `trades_<timestamp>.parquet` | Extracted trades with market linkage |
+| `quant_<timestamp>.parquet` | Cleaned quant data (YES-normalized) |
+| `users_<timestamp>.parquet` | Cleaned users data (split maker/taker) |
+
+A `latest_result/` directory alongside the output directory is also updated with CSV previews of the most recent 1 000 records for quick inspection.
+
+### State persistence
+
+Progress is saved to `continuous_state.json` in the output directory. Restart the script at any time — it resumes from the last processed block.
+
+### CLI usage
+
+```bash
+# Start with default settings (output: data/continuous, batch-size: 100)
+python -m polymarket.tools.continuous_fetch
+
+# Custom output directory and batch size
+python -m polymarket.tools.continuous_fetch \
+  --output-dir data/realtime \
+  --batch-size 200
+
+# Run in the background
+nohup python -m polymarket.tools.continuous_fetch \
+  > logs/continuous_fetch.log 2>&1 &
+
+# Graceful stop
+kill -SIGTERM <PID>
+```
+
+<ParamField path="--output-dir" type="string" default="data/continuous">
+  Directory where session Parquet files and the state file are written.
+</ParamField>
+<ParamField path="--batch-size" type="integer" default="100">
+  Number of blocks to fetch per request when in batch mode.
+</ParamField>
+
+<Tip>
+Use the shell scripts in `scripts/` as wrappers: `./scripts/continuous_start.sh` and `./scripts/continuous_stop.sh`.
+</Tip>
+
+---
+
+## merge_parquet
+
+Merges two or more Parquet files into a single output file, preserving row order. Uses streaming batch reads (500 000 rows at a time) to keep memory usage low even for very large files. Schema differences between files are resolved automatically.
+
+### CLI usage
+
+```bash
+python -m polymarket.tools.merge_parquet \
+  data/dataset/orderfilled_session_1.parquet \
+  data/dataset/orderfilled_session_2.parquet \
+  -o data/dataset/orderfilled.parquet
+
+# Preview without writing
+python -m polymarket.tools.merge_parquet \
+  file1.parquet file2.parquet \
+  -o merged.parquet \
+  --dry-run
+
+# Skip the overwrite confirmation prompt
+python -m polymarket.tools.merge_parquet \
+  file1.parquet file2.parquet \
+  -o merged.parquet \
+  --yes
+```
+
+<ParamField path="input_files" type="string[]" required>
+  One or more input Parquet file paths. Glob patterns are expanded automatically (e.g. `data/session_*.parquet`).
+</ParamField>
+<ParamField path="-o / --output" type="string" required>
+  Output Parquet file path. The parent directory is created if it does not exist.
+</ParamField>
+<ParamField path="--dry-run" type="boolean">
+  Print file statistics without writing any output.
+</ParamField>
+<ParamField path="-y / --yes" type="boolean">
+  Overwrite an existing output file without prompting. Required when running unattended (e.g. via `nohup`).
+</ParamField>
+<ParamField path="--log-file" type="string">
+  Write log output to this file in addition to stdout. Useful with `nohup`.
+</ParamField>
+
+### Python API
+
+```python
+from polymarket.tools.merge_parquet import merge_parquet_files
+
+success = merge_parquet_files(
+    input_files=["session_1.parquet", "session_2.parquet"],
+    output_file="merged.parquet",
+    dry_run=False,
+    auto_yes=True,
+)
+```
+
+<ParamField path="input_files" type="string[]" required>
+  List of input file paths.
+</ParamField>
+<ParamField path="output_file" type="string" required>
+  Output file path.
+</ParamField>
+<ParamField path="dry_run" type="boolean" default="False">
+  When `True`, print statistics but do not write.
+</ParamField>
+<ParamField path="auto_yes" type="boolean" default="False">
+  When `True`, overwrite existing output without prompting.
+</ParamField>
+
+Returns `True` on success, `False` on failure.
+
+---
+
+## sort_parquet
+
+Sorts a `users.parquet` or `quant.parquet` file by the appropriate columns using DuckDB external sorting. The tool reads the sort key from the `target` argument.
+
+| Target | Sort order |
+|---|---|
+| `users` | `user ASC`, `timestamp ASC` |
+| `quant` | `event_id ASC`, `market_id ASC`, `timestamp ASC` |
+
+DuckDB is required (`pip install duckdb`). The tool configures external sorting using a temporary directory so it can handle files larger than available RAM.
+
+### CLI usage
+
+```bash
+# Sort users with explicit paths
+python -m polymarket.tools.sort_parquet users \
+  -i data/data_clean/users.parquet \
+  -o data/data_clean/users_sorted.parquet
+
+# Sort quant, use default paths (data/data_clean/)
+python -m polymarket.tools.sort_parquet quant
+
+# Test mode: only process the first 1 000 000 rows
+python -m polymarket.tools.sort_parquet users \
+  -i users.parquet \
+  -o users_test.parquet \
+  --test
+```
+
+<ParamField path="target" type="string" required>
+  File type to sort: `users` or `quant`.
+</ParamField>
+<ParamField path="-i / --input" type="string">
+  Input file path. Defaults to `data/data_clean/<target>.parquet`.
+</ParamField>
+<ParamField path="-o / --output" type="string">
+  Output file path. Defaults to `data/data_clean/<target>_sorted.parquet`.
+</ParamField>
+<ParamField path="--test" type="boolean">
+  Limit processing to the first 1 000 000 rows and append `_test` to the default output filename.
+</ParamField>
+
+Output is written in `zstd` compression with row groups of 100 000 rows.
+
+---
+
+## refetch_failed_blocks
+
+Reads a list of failed block ranges from a plain-text file and retries each range using the standard `LogFetcher` → `EventDecoder` → `extract_trades` pipeline. Results are saved to time-stamped Parquet files alongside existing dataset files so you can merge them afterward.
+
+### Input file format
+
+Each line in the failed-blocks file must be a range in `start-end` format:
+
+```text
+68000000-68000099
+68001200-68001299
+68003000-68003100
+```
+
+### CLI usage
+
+```bash
+python -m polymarket.tools.refetch_failed_blocks \
+  data/failed_blocks_20251230_055516.txt
+```
+
+<ParamField path="failed_blocks_file" type="string" required>
+  Path to the text file listing failed block ranges, one per line.
+</ParamField>
+
+### Output files
+
+The script derives a timestamp from the input filename (`failed_blocks_<timestamp>.txt`) and writes:
+
+| File | Location |
+|---|---|
+| `orderfilled_refetched_<timestamp>.parquet` | `data/dataset/` |
+| `trades_refetched_<timestamp>.parquet` | `data/dataset/` |
+| `quant_refetched_<timestamp>.parquet` | `data/data_clean/` |
+| `users_refetched_<timestamp>.parquet` | `data/data_clean/` |
+
+After the refetch completes, merge these files into the main dataset using `merge_parquet`.
+
+```bash
+python -m polymarket.tools.merge_parquet \
+  data/dataset/orderfilled.parquet \
+  data/dataset/orderfilled_refetched_20251230_055516.parquet \
+  -o data/dataset/orderfilled_merged.parquet \
+  --yes
+```
+
+<Warning>
+The refetch script loads both `markets.parquet` and `missing_markets.parquet` (if it exists) to build the token mapping. Make sure these files are present and up to date before running.
+</Warning>
+
+---
+
+## Config helpers
+
+These two functions from `polymarket/config.py` are useful when building custom scripts.
+
+### `get_rpc_url(use_alchemy) → str`
+
+Returns the RPC endpoint URL to use for Polygon.
+
+```python
+from polymarket.config import get_rpc_url
+
+url = get_rpc_url(use_alchemy=False)
+# "https://polygon-rpc.com"
+
+url = get_rpc_url(use_alchemy=True)
+# "https://polygon-mainnet.g.alchemy.com/v2/<ALCHEMY_API_KEY>"
+# Falls back to polygon-rpc.com if ALCHEMY_API_KEY is not set.
+```
+
+<ParamField path="use_alchemy" type="boolean" default="False">
+  When `True`, reads `ALCHEMY_API_KEY` from the environment and returns an Alchemy URL.
+</ParamField>
+
+### `get_event_name(signature) → str`
+
+Looks up an event name by its keccak256 topic signature. Returns `'Unknown'` for unrecognized signatures.
+
+```python
+from polymarket.config import get_event_name
+
+name = get_event_name(
+    "0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6"
+)
+# "OrderFilled"
+```
+
+<ParamField path="signature" type="string" required>
+  Hex topic signature, with or without the `0x` prefix.
+</ParamField>

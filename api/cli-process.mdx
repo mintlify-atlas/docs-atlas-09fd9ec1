@@ -1,0 +1,270 @@
+---
+title: "process, process-historical, clean, and update commands"
+description: "Reference for process, process-historical, clean-users, clean-trades, clean, update, and merge-sessions — flags, examples, and dataset size guidance."
+---
+
+These commands transform raw on-chain events into analysis-ready Parquet files. Start with `process` for small datasets or `process-historical` for large ones, then run `clean` to produce the `users.parquet` and `quant.parquet` outputs. The `update` command runs the full pipeline in one step.
+
+---
+
+## process
+
+Reads all events from `orderfilled.parquet` into memory at once, links each trade to its market via the token mapping, optionally back-fills any missing tokens from the Gamma API, and writes the result to `trades.parquet`.
+
+```bash
+python -m polymarket.cli process [flags]
+```
+
+<Warning>
+  `process` loads the entire event file into memory. Use it only for small datasets (under ~1 GB). For larger files, use [`process-historical`](#process-historical) instead.
+</Warning>
+
+### Flags
+
+<ParamField path="--skip-missing" type="boolean">
+  Skip the back-fill step for tokens that have no matching market in `markets.parquet`. By default, the CLI queries the Gamma API for each missing token and saves the results to `missing_markets.parquet` before re-processing.
+</ParamField>
+
+### Examples
+
+```bash
+# Process trades and back-fill any missing tokens
+python -m polymarket.cli process
+
+# Process trades without querying the API for missing tokens
+python -m polymarket.cli process --skip-missing
+```
+
+---
+
+## process-historical
+
+Processes `orderfilled.parquet` in batches, streaming results into `trades.parquet`, `quant.parquet`, and `users.parquet` without loading the full file into memory. Use this command for any dataset larger than ~1 GB.
+
+```bash
+python -m polymarket.cli process-historical [flags]
+```
+
+### Flags
+
+<ParamField path="-b" type="integer" default="1000000">
+  Number of rows to process per batch.
+
+  Short form: `-b` — Long form: `--batch-size`
+</ParamField>
+
+<ParamField path="-c" type="boolean">
+  Resume from the last completed batch saved in `state.json` (`process_historical.last_batch`). Subsequent batches are written to a new session file and merged with the existing output at the end.
+
+  Short form: `-c` — Long form: `--continue`
+</ParamField>
+
+<ParamField path="--test-batches" type="integer">
+  Process only the first N batches and then stop. Useful for verifying output schema or spot-checking data without a full run.
+</ParamField>
+
+### Examples
+
+```bash
+# Process with default 1,000,000-row batches
+python -m polymarket.cli process-historical
+
+# Use smaller batches on a memory-constrained machine
+python -m polymarket.cli process-historical --batch-size 500000
+
+# Resume an interrupted run
+python -m polymarket.cli process-historical --continue
+
+# Test with only the first 2 batches
+python -m polymarket.cli process-historical --test-batches 2
+```
+
+---
+
+## clean-users
+
+Reads `trades.parquet` and generates `users.parquet`. Each trade becomes two records — one for the maker and one for the taker — with amounts unified to the BUY direction (negative values indicate selling).
+
+```bash
+python -m polymarket.cli clean-users [flags]
+```
+
+### Flags
+
+<ParamField path="-b" type="integer" default="5000000">
+  Number of rows to process per batch.
+
+  Short form: `-b` — Long form: `--batch-size`
+</ParamField>
+
+<ParamField path="-t" type="integer">
+  Process only the first N rows of `trades.parquet`. Useful for testing output structure before a full run.
+
+  Short form: `-t` — Long form: `--test`
+</ParamField>
+
+### Examples
+
+```bash
+# Generate users.parquet with default settings
+python -m polymarket.cli clean-users
+
+# Test on the first 100,000 rows
+python -m polymarket.cli clean-users --test 100000
+```
+
+---
+
+## clean-trades
+
+Reads `trades.parquet` and generates `quant.parquet`. Contract trades are filtered out, and all remaining trades are normalized to the YES token perspective.
+
+```bash
+python -m polymarket.cli clean-trades [flags]
+```
+
+### Flags
+
+<ParamField path="-b" type="integer" default="5000000">
+  Number of rows to process per batch.
+
+  Short form: `-b` — Long form: `--batch-size`
+</ParamField>
+
+<ParamField path="-t" type="integer">
+  Process only the first N rows of `trades.parquet`.
+
+  Short form: `-t` — Long form: `--test`
+</ParamField>
+
+### Examples
+
+```bash
+# Generate quant.parquet with default settings
+python -m polymarket.cli clean-trades
+
+# Test on the first 100,000 rows
+python -m polymarket.cli clean-trades --test 100000
+```
+
+---
+
+## clean
+
+Runs `clean-users` and then `clean-trades` in sequence. Both commands share the same `--batch-size` and `--test` flags.
+
+```bash
+python -m polymarket.cli clean [flags]
+```
+
+### Flags
+
+<ParamField path="-b" type="integer" default="5000000">
+  Batch size passed to both `clean-users` and `clean-trades`.
+
+  Short form: `-b` — Long form: `--batch-size`
+</ParamField>
+
+<ParamField path="-t" type="integer">
+  Row limit passed to both `clean-users` and `clean-trades`.
+
+  Short form: `-t` — Long form: `--test`
+</ParamField>
+
+### Examples
+
+```bash
+# Run both cleaning steps
+python -m polymarket.cli clean
+
+# Run both steps with a smaller batch size
+python -m polymarket.cli clean --batch-size 2000000
+```
+
+---
+
+## update
+
+Runs the complete update pipeline in order:
+
+<Steps>
+  <Step title="fetch-markets">
+    Incrementally fetches new markets from the Gamma API.
+  </Step>
+  <Step title="fetch-onchain --continue">
+    Resumes on-chain fetching from the last saved checkpoint.
+  </Step>
+  <Step title="process">
+    Processes the updated events into `trades.parquet`.
+  </Step>
+  <Step title="clean (optional)">
+    If `--clean` is passed, also runs `clean-users` and `clean-trades` with a 5,000,000-row batch size.
+  </Step>
+</Steps>
+
+```bash
+python -m polymarket.cli update [flags]
+```
+
+### Flags
+
+<ParamField path="-a" type="boolean">
+  Use the Alchemy RPC endpoint for the `fetch-onchain` step. Requires `ALCHEMY_API_KEY`.
+
+  Short form: `-a` — Long form: `--alchemy`
+</ParamField>
+
+<ParamField path="--skip-missing" type="boolean">
+  Skip missing token back-fill during the `process` step.
+</ParamField>
+
+<ParamField path="--clean" type="boolean">
+  After processing, also run `clean-users` and `clean-trades` to regenerate `users.parquet` and `quant.parquet`.
+</ParamField>
+
+### Examples
+
+```bash
+# Standard update: fetch markets, fetch on-chain, process
+python -m polymarket.cli update
+
+# Update and also regenerate cleaned datasets
+python -m polymarket.cli update --clean
+
+# Use Alchemy for on-chain fetching and skip missing token API calls
+python -m polymarket.cli update --alchemy --skip-missing
+```
+
+<Tip>
+  `update_all.sh` is a convenience wrapper that runs the equivalent three-step pipeline without the optional `--clean` step.
+</Tip>
+
+---
+
+## merge-sessions
+
+Merges all session, refetch, and append Parquet files into their corresponding main files. Run this after `fetch-onchain` (when `--merge` was not passed) or after `process-historical --continue`.
+
+The command handles the following file patterns across `data/dataset/` and `data/data_clean/`:
+
+- `orderfilled_session_*.parquet`, `orderfilled_refetched_*.parquet`, `orderfilled_append.parquet`
+- `trades_session_*.parquet`, `trades_refetched_*.parquet`, `trades_append.parquet`
+- `quant_session_*.parquet`, `quant_refetched_*.parquet`, `quant_append.parquet`
+- `users_session_*.parquet`, `users_refetched_*.parquet`, `users_append.parquet`
+
+```bash
+python -m polymarket.cli merge-sessions
+```
+
+This command takes no additional flags.
+
+### Example
+
+```bash
+# After several fetch-onchain runs without --merge
+python -m polymarket.cli merge-sessions
+```
+
+<Note>
+  `merge-sessions` reads all matching files into memory at once. Make sure you have sufficient RAM if you have accumulated many large session files. For merging individual files with more control, use the [`merge_parquet` tool](/api/cli-tools#merge-parquet) instead.
+</Note>

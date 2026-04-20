@@ -1,0 +1,193 @@
+---
+title: "Parquet utilities: merge_parquet, sort_parquet, refetch"
+description: "Reference for merge_parquet, sort_parquet, and refetch_failed_blocks — standalone tools for managing Polymarket Parquet datasets."
+---
+
+The `polymarket/tools/` directory contains standalone utilities for working with Parquet files outside of the main fetch-and-process pipeline. You invoke each tool as a Python module with `python -m polymarket.tools.<name>`.
+
+---
+
+## merge_parquet
+
+Merges two or more Parquet files into a single output file. Files are concatenated in the order you specify them on the command line. The tool reads and writes in streaming batches of 500,000 rows, so it handles files larger than available RAM.
+
+```bash
+python -m polymarket.tools.merge_parquet FILE [FILE ...] -o OUTPUT [flags]
+```
+
+### Flags
+
+<ParamField path="FILE [FILE ...]" type="string" required>
+  One or more input Parquet file paths. Shell glob patterns (e.g., `orderfilled_session_*.parquet`) are expanded automatically.
+</ParamField>
+
+<ParamField path="-o" type="string" required>
+  Output file path for the merged result.
+
+  Short form: `-o` — Long form: `--output`
+</ParamField>
+
+<ParamField path="--dry-run" type="boolean">
+  Display file info (row counts, sizes) without writing any output. Useful for confirming which files will be merged before committing.
+</ParamField>
+
+<ParamField path="-y" type="boolean">
+  Automatically confirm overwriting the output file if it already exists. Without this flag, the tool prompts for confirmation interactively. Pass `-y` when running under `nohup`.
+
+  Short form: `-y` — Long form: `--yes`
+</ParamField>
+
+<ParamField path="--log-file" type="string">
+  Path to a log file. When provided, the tool writes log output to both the file and stdout — useful for long-running background jobs.
+</ParamField>
+
+### Examples
+
+```bash
+# Merge two orderfilled session files into one
+python -m polymarket.tools.merge_parquet \
+  data/dataset/orderfilled.parquet \
+  data/dataset/orderfilled_session_20260101_120000.parquet \
+  -o data/dataset/orderfilled_merged.parquet
+
+# Preview what would be merged without writing output
+python -m polymarket.tools.merge_parquet \
+  data/dataset/orderfilled_session_*.parquet \
+  -o data/dataset/orderfilled_merged.parquet \
+  --dry-run
+
+# Run in background with automatic overwrite confirmation
+nohup python -m polymarket.tools.merge_parquet \
+  data/dataset/orderfilled.parquet \
+  data/dataset/orderfilled_refetched_*.parquet \
+  -o data/dataset/orderfilled_merged.parquet \
+  -y \
+  --log-file logs/merge.log > /dev/null 2>&1 &
+```
+
+<Note>
+  If the input files have mismatched schemas, `merge_parquet` attempts an automatic type cast. If that fails it falls back to a pandas-based conversion. Check the log output for any type conversion warnings.
+</Note>
+
+---
+
+## sort_parquet
+
+Sorts a Parquet file using DuckDB's external sort, which spills to disk when data exceeds available memory. This makes it suitable for files that do not fit in RAM.
+
+You specify the target file type (`users` or `quant`), which determines the sort key:
+
+- **users** — sorted by `user ASC, timestamp ASC`
+- **quant** — sorted by `event_id ASC, market_id ASC, timestamp ASC`
+
+```bash
+python -m polymarket.tools.sort_parquet TARGET [flags]
+```
+
+### Positional argument
+
+<ParamField path="TARGET" type="string" required>
+  File type to sort. Must be `users` or `quant`. This controls the sort key and the default input/output paths under `data/data_clean/`.
+</ParamField>
+
+### Flags
+
+<ParamField path="-i" type="string">
+  Full path to the input Parquet file. Defaults to `data/data_clean/users.parquet` or `data/data_clean/quant.parquet` depending on TARGET.
+
+  Short form: `-i` — Long form: `--input`
+</ParamField>
+
+<ParamField path="-o" type="string">
+  Full path for the sorted output file. Defaults to `data/data_clean/users_sorted.parquet` or `data/data_clean/quant_sorted.parquet`.
+
+  Short form: `-o` — Long form: `--output`
+</ParamField>
+
+<ParamField path="--test" type="boolean">
+  Test mode: process only the first 1,000,000 rows. The output file name gets a `_test` suffix when using the default output path.
+</ParamField>
+
+### Examples
+
+```bash
+# Sort users.parquet using default paths
+python -m polymarket.tools.sort_parquet users
+
+# Sort quant.parquet with explicit paths
+python -m polymarket.tools.sort_parquet quant \
+  -i data/data_clean/quant.parquet \
+  -o data/data_clean/quant_sorted.parquet
+
+# Test sort on the first 1M rows of users
+python -m polymarket.tools.sort_parquet users --test
+
+# Run as a background job with log capture
+nohup python -m polymarket.tools.sort_parquet users \
+  -i data/data_clean/users.parquet \
+  -o data/data_clean/users_sorted.parquet \
+  > logs/sort_users.log 2>&1 &
+```
+
+---
+
+## refetch_failed_blocks
+
+Re-fetches block ranges that were recorded as failures during a previous `fetch-onchain` run. Pass the path to a `failed_blocks_TIMESTAMP.txt` file generated by `fetch-onchain`. The tool writes the recovered data to timestamped refetch files (`orderfilled_refetched_TIMESTAMP.parquet`, etc.) that you can later merge with `merge-sessions`.
+
+```bash
+python -m polymarket.tools.refetch_failed_blocks FAILED_BLOCKS_FILE
+```
+
+### Positional argument
+
+<ParamField path="FAILED_BLOCKS_FILE" type="string" required>
+  Path to a failed blocks text file. Each line must follow the format `START-END` (e.g., `80000000-80000100`). These files are written automatically by `fetch-onchain` whenever a batch fails due to an RPC error.
+</ParamField>
+
+### Output files
+
+The tool writes four refetch files derived from the timestamp in `FAILED_BLOCKS_FILE`:
+
+```
+data/dataset/orderfilled_refetched_TIMESTAMP.parquet
+data/dataset/trades_refetched_TIMESTAMP.parquet
+data/data_clean/quant_refetched_TIMESTAMP.parquet
+data/data_clean/users_refetched_TIMESTAMP.parquet
+```
+
+Run `merge-sessions` afterward to incorporate these files into the main Parquet files.
+
+### Example
+
+```bash
+# Re-fetch blocks listed in a failure log from a previous run
+python -m polymarket.tools.refetch_failed_blocks \
+  data/failed_blocks_20260101_080000.txt
+
+# Then merge the recovered data into the main files
+python -m polymarket.cli merge-sessions
+```
+
+<Warning>
+  `refetch_failed_blocks` uses the default public Polygon RPC. If those same blocks continue to fail, switch to the Alchemy endpoint by setting `ALCHEMY_API_KEY` and modifying the `LogFetcher` initialization in the tool, or re-fetch the block range manually with `fetch-onchain --range START END --alchemy`.
+</Warning>
+
+---
+
+## Shell scripts
+
+The `scripts/` directory provides quick access to common workflows. All scripts call `python -m polymarket.cli` internally.
+
+| Script | Equivalent CLI call | Notes |
+|---|---|---|
+| `continuous_start.sh` | `python -m polymarket.tools.continuous_fetch` | Runs in background via `nohup`; writes PID to `logs/continuous_fetch.pid` |
+| `continuous_stop.sh` | Reads PID file and sends a stop signal | Gracefully shuts down the continuous fetch process |
+| `fetch_onchain.sh [N]` | `polymarket.cli fetch-onchain --blocks N` | N defaults to 1000 if omitted |
+| `fetch_markets.sh` | `polymarket.cli fetch-markets` | No arguments |
+| `clean_data.sh` | `polymarket.cli process` | Runs the small-dataset process command |
+| `update_all.sh` | fetch-markets → fetch-onchain --continue → process | Full three-step pipeline |
+
+<Tip>
+  For unattended or scheduled runs, use the shell scripts with `nohup` or add them to a cron job. Logs go to the `logs/` directory.
+</Tip>

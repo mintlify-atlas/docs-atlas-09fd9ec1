@@ -1,97 +1,94 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Polymarket Data: Complete blockchain trading dataset"
+description: "107GB of Polymarket prediction market data — 1.1B records across 268K+ markets. Download from HuggingFace or fetch live with the Python toolkit."
 ---
 
-## Setting up
+Polymarket Data is a comprehensive dataset and open-source toolkit for Polymarket prediction markets. It provides 1.1 billion on-chain trading records fetched directly from the Polygon blockchain, processed into five analysis-ready Parquet formats covering raw events, trades, market metadata, quantitative analysis, and user behavior.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Download the dataset or start fetching live data in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Dataset Overview" icon="database" href="/dataset/overview">
+    Explore the five Parquet files and 107GB of trading records
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Data Schema" icon="table" href="/dataset/schema">
+    Full field-by-field schema for every dataset file
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Python API" icon="python" href="/api/python-overview">
+    Use the toolkit as a library in your own analysis code
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What's in the dataset
 
-Everything you need to create world-class documentation.
+The dataset covers every OrderFilled event from Polymarket's two official exchange contracts on Polygon, from inception through early 2026. Five processed files serve different research needs:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+| File | Size | Records | Best for |
+|------|------|---------|----------|
+| `orderfilled.parquet` | 31 GB | 293.3M | Raw blockchain event analysis |
+| `trades.parquet` | 32 GB | 293.3M | Trade-level analysis with market metadata |
+| `markets.parquet` | 68 MB | 268,706 | Market lookup and metadata joins |
+| `quant.parquet` | 21 GB | 170.3M | Price studies, time-series forecasting |
+| `users.parquet` | 23 GB | 340.6M | PnL calculation, wallet profiling |
 
-## Need inspiration?
+## Get started
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Download the dataset">
+    Get all historical data from HuggingFace — no setup required.
+
+    ```bash
+    pip install huggingface_hub
+    hf download SII-WANGZJ/Polymarket_data --repo-type dataset
+    ```
+  </Step>
+  <Step title="Install the toolkit">
+    Install the Python package to fetch fresh data or run the full pipeline.
+
+    ```bash
+    git clone https://github.com/SII-WANGZJ/Polymarket_data.git
+    cd Polymarket_data
+    pip install -e .
+    ```
+  </Step>
+  <Step title="Analyze the data">
+    Load any Parquet file with pandas and start exploring.
+
+    ```python
+    import pandas as pd
+
+    df = pd.read_parquet('quant.parquet')
+    market_stats = df.groupby('market_id').agg({
+        'usd_amount': 'sum',
+        'price': ['mean', 'std'],
+        'transaction_hash': 'count'
+    })
+    print(market_stats.head())
+    ```
+  </Step>
+  <Step title="Fetch live data">
+    Run continuous mode to keep your local copy synced with the blockchain.
+
+    ```bash
+    ./scripts/continuous_start.sh
+    ```
+  </Step>
+</Steps>
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Market research" icon="chart-line" href="/guides/data-analysis">
+    Study price discovery, market efficiency, and information aggregation across 268K+ prediction markets
+  </Card>
+  <Card title="Behavioral studies" icon="users" href="/dataset/schema">
+    Track individual trading patterns using the user-level dataset with signed position amounts
+  </Card>
+  <Card title="Machine learning" icon="brain" href="/guides/data-analysis">
+    Train price prediction models on 1.1 billion time-series trading records
+  </Card>
+  <Card title="Real-time fetching" icon="bolt" href="/guides/continuous-mode">
+    Run the continuous pipeline to sync new blocks every 2 seconds from Polygon RPC
+  </Card>
+</CardGroup>

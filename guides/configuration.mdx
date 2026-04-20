@@ -1,0 +1,124 @@
+---
+title: "Configure the Polymarket Data toolkit: RPC and paths"
+description: "Set environment variables, swap RPC endpoints, and understand the key constants and file paths that control how the toolkit fetches and stores data."
+---
+
+Most defaults work out of the box, but you will want to review this page if you need a faster RPC endpoint, want to point data directories to a different location, or are integrating the toolkit into an automated pipeline.
+
+## Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `ALCHEMY_API_KEY` | No | Enables the Alchemy Polygon endpoint for lower latency and higher rate limits |
+| `POLYMARKET_CTF_EXCHANGE` | No | Override the default CTF Exchange contract address |
+| `POLYMARKET_NEGRISK_CTF_EXCHANGE` | No | Override the default NegRisk CTF Exchange contract address |
+
+### Setting `ALCHEMY_API_KEY`
+
+This is the only environment variable that meaningfully affects performance. When set, every command that accepts `--alchemy` will route RPC calls through `https://polygon-mainnet.g.alchemy.com/v2/<your-key>` instead of the public `https://polygon-rpc.com` endpoint.
+
+```bash
+export ALCHEMY_API_KEY=your_key_here
+
+# Then pass --alchemy to any fetch command
+python -m polymarket.cli fetch-onchain --blocks 10000 --alchemy
+```
+
+The continuous mode start script also picks up this variable automatically:
+
+```bash
+export ALCHEMY_API_KEY=your_key_here
+./scripts/continuous_start.sh
+```
+
+<Note>
+`ALCHEMY_API_KEY` is optional. The public `polygon-rpc.com` endpoint works for all commands but may rate-limit under heavy batch fetching.
+</Note>
+
+### Overriding contract addresses
+
+The toolkit tracks `OrderFilled` events from two contracts. You can override either address via environment variables if you need to monitor a custom deployment:
+
+```bash
+export POLYMARKET_CTF_EXCHANGE=0xYourCustomAddress
+export POLYMARKET_NEGRISK_CTF_EXCHANGE=0xYourCustomAddress
+```
+
+The defaults are the official Polymarket production contracts:
+
+| Contract | Address |
+|---|---|
+| `CTF_EXCHANGE` | `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E` |
+| `NEGRISK_CTF_EXCHANGE` | `0xC5d563A36AE78145C45a50134d48A1215220f80a` |
+
+## Custom RPC endpoint
+
+To use a different RPC provider permanently—without passing `--alchemy` each time—edit `polymarket/config.py` and change `POLYGON_RPC_URL`:
+
+```python
+# polymarket/config.py
+POLYGON_RPC_URL = 'https://your-custom-rpc-endpoint.example.com'
+```
+
+The `get_rpc_url()` function returns `POLYGON_RPC_URL` when `use_alchemy=False` (the default), so this change applies globally to all commands that do not explicitly pass `--alchemy`.
+
+## Key constants
+
+These values in `polymarket/config.py` control fetching behavior:
+
+| Constant | Default | Description |
+|---|---|---|
+| `BLOCKS_PER_BATCH` | `100` | Blocks fetched per RPC call in all batch modes |
+| `REQUEST_DELAY` | `0.2` | Seconds to wait between RPC requests |
+| `USDC_ASSET_ID` | `'0'` | Asset ID used to identify the USDC side of a trade |
+
+Increasing `BLOCKS_PER_BATCH` above 100 may cause some public RPC nodes to reject the request with a log size limit error. Alchemy supports larger ranges.
+
+## File paths
+
+All data paths are defined relative to the `polymarket/` package directory:
+
+| Constant | Default path | Contents |
+|---|---|---|
+| `DATA_DIR` | `polymarket/data/` | Root data directory |
+| `DATASET_DIR` | `polymarket/data/dataset/` | Full parquet files (`orderfilled`, `trades`, `markets`) |
+| `DATA_CLEAN_DIR` | `polymarket/data/data_clean/` | Cleaned files (`quant`, `users`) |
+| `LATEST_RESULT_DIR` | `polymarket/data/latest_result/` | Rolling CSV previews (last 1 000 rows) |
+| `STATE_FILE` | `polymarket/data/state.json` | Checkpoint and progress tracking |
+| `TEMP_DIR` | `polymarket/data/temp/` | Temporary working files |
+
+To relocate the data directory, change `DATA_DIR` in `config.py`. All other path constants derive from it, so a single edit moves everything.
+
+## State file structure
+
+`data/state.json` is the checkpoint file. It tracks progress for each sub-command independently:
+
+```json
+{
+  "fetch_onchain": {
+    "last_block": 68432100,
+    "updated_at": "2026-04-20T14:23:11.400000"
+  },
+  "fetch_markets": {
+    "last_offset": 12500,
+    "total_markets": 268706,
+    "new_count": 42,
+    "updated_at": "2026-04-20T12:00:00.000000"
+  },
+  "process_historical": {
+    "last_batch": 170,
+    "total_batches": 294,
+    "total_trades": 170000000,
+    "total_quant": 110000000,
+    "total_users": 225000000,
+    "session_id": 1,
+    "updated_at": "2026-04-20T10:00:00.000000"
+  }
+}
+```
+
+`fetch_onchain.last_block` is the most important field. Passing `--continue` to `fetch-onchain` reads this value and starts fetching from `last_block + 1`. You can edit the file manually to force a specific resume point.
+
+<Warning>
+Deleting `state.json` causes `--continue` to fall back to reading the maximum `block_number` from `orderfilled.parquet`. If that file is also absent, the next run starts from the current chain head minus one batch (100 blocks).
+</Warning>

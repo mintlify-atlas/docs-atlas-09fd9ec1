@@ -1,0 +1,97 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Polymarket Data",
+  "projectDescription": "A comprehensive toolkit and 107GB dataset of 1.1 billion Polymarket trading records, with tools to fetch data directly from the Polygon blockchain and process it into multiple analysis-ready Parquet formats.",
+  "theme": "palm",
+  "primaryColor": "#f8c61e",
+  "lightColor": "#fbf9ec",
+  "darkColor": "#4e412f",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Dataset",
+            "pages": [
+              "dataset/overview",
+              "dataset/schema",
+              "dataset/download"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/continuous-mode",
+              "guides/batch-fetching",
+              "guides/data-analysis",
+              "guides/configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "CLI Commands",
+            "pages": [
+              "api/cli-overview",
+              "api/cli-fetch",
+              "api/cli-process",
+              "api/cli-tools"
+            ]
+          },
+          {
+            "group": "Python API",
+            "pages": [
+              "api/python-overview",
+              "api/fetchers",
+              "api/processors",
+              "api/tools"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "1.1 billion trading records from Polymarket's inception to present across 268K+ markets",
+    "Direct data access from Polygon blockchain via RPC — no third-party dependencies",
+    "5 analysis-ready Parquet datasets: orderfilled, trades, markets, quant, users",
+    "Real-time continuous mode that syncs new data every 2 seconds",
+    "Resume support with auto-save checkpoints — restart without data loss",
+    "Efficient Parquet storage with Snappy compression and incremental writes",
+    "Unified YES-token perspective in quant.parquet for clean market analysis",
+    "User-level split records with signed amounts for PnL and behavioral studies"
+  ],
+  "publicApiSurface": [
+    "LogFetcher",
+    "PolygonRpcClient",
+    "GammaApiClient",
+    "EventDecoder",
+    "extract_trades",
+    "load_token_mapping",
+    "find_missing_tokens",
+    "clean_trades_df",
+    "clean_users_df",
+    "polymarket.cli fetch-onchain",
+    "polymarket.cli fetch-markets",
+    "polymarket.cli process",
+    "polymarket.cli process-historical",
+    "polymarket.cli clean",
+    "polymarket.cli update",
+    "polymarket.cli merge-sessions",
+    "polymarket.tools.merge_parquet",
+    "polymarket.tools.sort_parquet",
+    "polymarket.tools.refetch_failed_blocks"
+  ]
+}

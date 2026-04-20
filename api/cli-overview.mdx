@@ -1,0 +1,74 @@
+---
+title: "Polymarket CLI: command reference and shell scripts"
+description: "Complete reference for the polymarket CLI: invocation patterns, all available commands, common flags, and convenience shell scripts."
+---
+
+The `polymarket` CLI provides commands to fetch on-chain data from Polygon, retrieve market metadata from the Gamma API, process raw events into analysis-ready Parquet files, and clean the resulting datasets. You can invoke it as a Python module or, if you installed the package via `setup.py`, as the `polymarket` executable.
+
+## Invocation
+
+<CodeGroup>
+
+```bash Module invocation
+python -m polymarket.cli <command> [flags]
+```
+
+```bash Installed package
+polymarket <command> [flags]
+```
+
+</CodeGroup>
+
+## Global flags
+
+<ParamField path="-v" type="boolean">
+  Enable verbose (DEBUG-level) logging. When omitted, the CLI logs at INFO level. Applies to every subcommand.
+
+  Short form: `-v` — Long form: `--verbose`
+</ParamField>
+
+## Commands
+
+| Command | Description |
+|---|---|
+| [`fetch-onchain`](/api/cli-fetch#fetch-onchain) | Fetch OrderFilled events from Polygon blockchain |
+| [`fetch-markets`](/api/cli-fetch#fetch-markets) | Incrementally fetch new markets from Gamma API |
+| [`update-markets`](/api/cli-fetch#update-markets) | Update status of unresolved markets |
+| [`process`](/api/cli-process#process) | Process trades from `orderfilled.parquet` (small datasets) |
+| [`process-historical`](/api/cli-process#process-historical) | Batch-process large historical event files |
+| [`clean-users`](/api/cli-process#clean-users) | Generate `users.parquet` from `trades.parquet` |
+| [`clean-trades`](/api/cli-process#clean-trades) | Generate `quant.parquet` from `trades.parquet` |
+| [`clean`](/api/cli-process#clean) | Run both `clean-users` and `clean-trades` |
+| [`update`](/api/cli-process#update) | Full pipeline: fetch markets → fetch on-chain → process |
+| [`merge-sessions`](/api/cli-process#merge-sessions) | Merge all session, refetch, and append Parquet files into main files |
+
+## Shell scripts
+
+The `scripts/` directory contains convenience wrappers around CLI commands. Use them for common workflows without typing full invocations.
+
+| Script | Description |
+|---|---|
+| `continuous_start.sh` | Start continuous background fetching via `polymarket.tools.continuous_fetch` |
+| `continuous_stop.sh` | Stop the continuous fetching process |
+| `fetch_onchain.sh [N]` | Fetch the last N blocks (default: 1000) |
+| `fetch_markets.sh` | Fetch market metadata from Gamma API |
+| `clean_data.sh` | Run `process` to clean raw on-chain data |
+| `update_all.sh` | Full three-step pipeline: fetch markets, fetch on-chain (`--continue`), process |
+
+<Tip>
+  Use `continuous_start.sh` for 24/7 real-time data collection. The continuous fetch tool switches between batch mode (100 blocks at a time when behind) and real-time mode (1 block every 2 seconds when caught up).
+</Tip>
+
+## Reference pages
+
+<CardGroup cols={3}>
+  <Card title="Fetch commands" icon="download" href="/api/cli-fetch">
+    `fetch-onchain`, `fetch-markets`, and `update-markets` — bring data in from Polygon and the Gamma API.
+  </Card>
+  <Card title="Process commands" icon="gear" href="/api/cli-process">
+    `process`, `process-historical`, `clean-users`, `clean-trades`, `clean`, `update`, and `merge-sessions`.
+  </Card>
+  <Card title="Utility tools" icon="wrench" href="/api/cli-tools">
+    Standalone Parquet tools: `merge_parquet`, `sort_parquet`, and `refetch_failed_blocks`.
+  </Card>
+</CardGroup>

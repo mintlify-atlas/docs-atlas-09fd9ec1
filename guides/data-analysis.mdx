@@ -1,0 +1,161 @@
+---
+title: "Analyze Polymarket data with Python and pandas"
+description: "Load Polymarket parquet files into pandas to compute market statistics, plot price evolution, profile user behavior, and rank markets by trading volume."
+---
+
+The Polymarket dataset ships as five parquet files that you can load directly into pandas. Each file is optimized for a different type of analysis: `quant.parquet` for market-level studies, `users.parquet` for behavioral research, and `markets.parquet` as a metadata index. The examples below cover the most common patterns.
+
+## Which file to use
+
+| File | Best for |
+|---|---|
+| `quant.parquet` | Price analysis, market statistics, time-series forecasting |
+| `users.parquet` | User profiling, PnL calculation, wallet trajectory analysis |
+| `markets.parquet` | Filtering by market attributes, joining question text to trades |
+| `trades.parquet` | Raw trade-level analysis with full maker/taker fee breakdown |
+| `orderfilled.parquet` | Blockchain-level auditing, contract-level research |
+
+<Note>
+`quant.parquet` (21 GB) and `users.parquet` (23 GB) are large. If you only need a subset of markets or a date range, use pyarrow column and row filters (shown at the end of this guide) to avoid loading the entire file into memory.
+</Note>
+
+## Example 1: Calculate market statistics
+
+Load `quant.parquet` and compute per-market aggregates: total and average volume, price statistics, and trade count.
+
+```python
+import pandas as pd
+
+df = pd.read_parquet('quant.parquet')
+
+# Market-level statistics
+market_stats = df.groupby('market_id').agg({
+    'usd_amount': ['sum', 'mean'],          # Total volume and average trade size
+    'price': ['mean', 'std', 'min', 'max'], # Price statistics
+    'transaction_hash': 'count'              # Number of trades
+}).round(4)
+
+print(market_stats.head())
+```
+
+The resulting DataFrame has a two-level column index. Flatten it with `market_stats.columns = ['_'.join(c) for c in market_stats.columns]` if you need a single-level index for downstream processing.
+
+## Example 2: Track price evolution
+
+Plot how the YES price moved over time for a specific market. `quant.parquet` normalizes all trades to the YES token perspective, so the `price` column directly represents the probability implied by each trade.
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df = pd.read_parquet('quant.parquet')
+df['datetime'] = pd.to_datetime(df['datetime'])
+
+# Select a specific market
+market_id = 'your-market-id'
+market_data = df[df['market_id'] == market_id].sort_values('datetime')
+
+# Plot price over time
+plt.figure(figsize=(12, 6))
+plt.plot(market_data['datetime'], market_data['price'])
+plt.title(f'Price Evolution - Market {market_id}')
+plt.xlabel('Date')
+plt.ylabel('Price')
+plt.show()
+```
+
+<Tip>
+Use `df.groupby('market_id')['usd_amount'].sum().nlargest(10)` to find the highest-volume market IDs before selecting one to plot.
+</Tip>
+
+## Example 3: Analyze user behavior
+
+`users.parquet` splits each trade into two records—one for the maker and one for the taker—and converts all positions to a unified BUY direction. Positive `token_amount` values represent buying; negative values represent selling.
+
+```python
+import pandas as pd
+
+df = pd.read_parquet('users.parquet')
+
+# Calculate net position per user per market
+user_positions = df.groupby(['user', 'market_id']).agg({
+    'token_amount': 'sum',       # Net position (positive = long, negative = short)
+    'usd_amount': 'sum',         # Total USD traded
+    'transaction_hash': 'count'  # Number of trades
+}).reset_index()
+
+# Find most active users
+active_users = user_positions.groupby('user').agg({
+    'market_id': 'count',   # Number of markets traded
+    'usd_amount': 'sum'     # Total volume
+}).sort_values('usd_amount', ascending=False)
+
+print(active_users.head(10))
+```
+
+The `role` column in `users.parquet` is either `'maker'` or `'taker'`. Filter on it to study each side of the order book separately:
+
+```python
+makers = df[df['role'] == 'maker']
+takers = df[df['role'] == 'taker']
+```
+
+## Example 4: Market volume analysis
+
+Join `quant.parquet` with `markets.parquet` to attach human-readable question text to each trade, then rank markets by total USD volume.
+
+```python
+import pandas as pd
+
+df = pd.read_parquet('quant.parquet')
+markets = pd.read_parquet('markets.parquet')
+
+# Join on market_id (trades) <-> id (markets)
+df = df.merge(markets[['id', 'question']], left_on='market_id', right_on='id', how='left')
+
+# Top markets by volume
+top_markets = df.groupby(['market_id', 'question']).agg({
+    'usd_amount': 'sum'
+}).sort_values('usd_amount', ascending=False).head(20)
+
+print(top_markets)
+```
+
+`markets.parquet` is only 68 MB, so it is safe to load in full even on machines with limited RAM. The join key is `market_id` in trade files and `id` in `markets.parquet`.
+
+## Reading large files efficiently
+
+For files larger than available RAM, use pyarrow to filter rows and select columns before loading into pandas. The following example loads only trades for a single market and only the columns you need:
+
+```python
+import pyarrow.parquet as pq
+
+# Read only selected columns and filter rows at the storage layer
+table = pq.read_table(
+    'quant.parquet',
+    columns=['datetime', 'market_id', 'price', 'usd_amount'],
+    filters=[('market_id', '=', 'your-market-id')]
+)
+
+df = table.to_pandas()
+df['datetime'] = pd.to_datetime(df['datetime'])
+```
+
+For even larger workloads, iterate over the file in chunks using `ParquetFile.iter_batches`:
+
+```python
+import pyarrow.parquet as pq
+import pandas as pd
+
+results = []
+parquet_file = pq.ParquetFile('users.parquet')
+
+for batch in parquet_file.iter_batches(batch_size=1_000_000):
+    chunk = batch.to_pandas()
+    # Filter and aggregate within each chunk
+    filtered = chunk[chunk['usd_amount'] > 1000]
+    results.append(filtered.groupby('user')['usd_amount'].sum())
+
+combined = pd.concat(results).groupby(level=0).sum()
+print(combined.nlargest(20))
+```

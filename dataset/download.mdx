@@ -1,0 +1,199 @@
+---
+title: "Download Polymarket trading data from HuggingFace"
+description: "Get all five Parquet files (107 GB total) from HuggingFace using the CLI, Python API, or git-lfs — with examples for loading data in pandas and PyArrow."
+---
+
+The full Polymarket dataset is hosted on HuggingFace at [SII-WANGZJ/Polymarket_data](https://huggingface.co/datasets/SII-WANGZJ/Polymarket_data). You can download individual files or the entire collection using the HuggingFace CLI, the Python `huggingface_hub` library, or git-lfs.
+
+<Warning>
+  The complete dataset is **107 GB**. Download only the files you need. For most analysis tasks, `quant.parquet` (21 GB) or `users.parquet` (23 GB) is sufficient without downloading the raw `orderfilled.parquet` (31 GB) or `trades.parquet` (32 GB).
+</Warning>
+
+## File sizes at a glance
+
+| File | Size | Best for |
+|------|------|---------|
+| `quant.parquet` | 21 GB | Market analysis, price studies, time-series |
+| `users.parquet` | 23 GB | Wallet analysis, PnL, user behavior |
+| `orderfilled.parquet` | 31 GB | Raw blockchain research, custom processing |
+| `trades.parquet` | 32 GB | Intermediate processing, full field access |
+| `markets.parquet` | 68 MB | Market metadata, question lookup |
+
+## Download methods
+
+<Tabs>
+  <Tab title="huggingface_hub CLI">
+    Install the CLI and download one file or all files.
+
+    <Steps>
+      <Step title="Install huggingface_hub">
+        ```bash
+        pip install huggingface_hub
+        ```
+      </Step>
+      <Step title="Download a specific file">
+        ```bash
+        hf download SII-WANGZJ/Polymarket_data quant.parquet --repo-type dataset
+        ```
+
+        Replace `quant.parquet` with any file name from the table above.
+      </Step>
+      <Step title="Download the entire dataset">
+        ```bash
+        hf download SII-WANGZJ/Polymarket_data --repo-type dataset
+        ```
+
+        <Tip>
+          This downloads all 107 GB. Make sure you have enough disk space before running this command.
+        </Tip>
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Python API">
+    Use the `huggingface_hub` Python library to download files programmatically.
+
+    <Steps>
+      <Step title="Install huggingface_hub">
+        ```bash
+        pip install huggingface_hub
+        ```
+      </Step>
+      <Step title="Download a specific file">
+        ```python
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(
+            repo_id="SII-WANGZJ/Polymarket_data",
+            filename="quant.parquet",
+            repo_type="dataset",
+        )
+        print(f"Downloaded to: {path}")
+        ```
+      </Step>
+      <Step title="Download the entire dataset">
+        ```python
+        from huggingface_hub import snapshot_download
+
+        local_dir = snapshot_download(
+            repo_id="SII-WANGZJ/Polymarket_data",
+            repo_type="dataset",
+        )
+        print(f"Dataset saved to: {local_dir}")
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="git lfs">
+    Clone the dataset repository directly using git with Large File Storage support.
+
+    <Steps>
+      <Step title="Install git-lfs">
+        ```bash
+        # macOS
+        brew install git-lfs
+
+        # Ubuntu / Debian
+        sudo apt install git-lfs
+
+        git lfs install
+        ```
+      </Step>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://huggingface.co/datasets/SII-WANGZJ/Polymarket_data
+        ```
+
+        All Parquet files are tracked by git-lfs and will be downloaded automatically.
+      </Step>
+      <Step title="Download a single file (optional)">
+        To avoid downloading all files, use `GIT_LFS_SKIP_SMUDGE` and then pull only what you need:
+
+        ```bash
+        GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/datasets/SII-WANGZJ/Polymarket_data
+        cd Polymarket_data
+        git lfs pull --include="quant.parquet"
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Loading data
+
+After downloading, load the Parquet files with pandas or PyArrow.
+
+<CodeGroup>
+
+```python pandas
+import pandas as pd
+
+# Load a single file
+df = pd.read_parquet("quant.parquet")
+print(df.head())
+print(df.dtypes)
+```
+
+```python pyarrow
+import pyarrow.parquet as pq
+
+# Load with PyArrow for lower memory usage
+table = pq.read_table("quant.parquet")
+df = table.to_pandas()
+print(df.head())
+```
+
+</CodeGroup>
+
+### Load specific columns
+
+If memory is a constraint, you can load only the columns you need:
+
+```python
+import pandas as pd
+
+# Load only the columns needed for a price study
+df = pd.read_parquet(
+    "quant.parquet",
+    columns=["datetime", "market_id", "price", "usd_amount"],
+)
+```
+
+### Join trades with market metadata
+
+```python
+import pandas as pd
+
+df = pd.read_parquet("quant.parquet")
+markets = pd.read_parquet("markets.parquet")
+
+# Join on market_id / id
+df = df.merge(markets[["id", "question"]], left_on="market_id", right_on="id", how="left")
+print(df[["datetime", "question", "price", "usd_amount"]].head())
+```
+
+## Incremental updates
+
+The dataset on HuggingFace covers all historical data before 2026. To fetch newer data, use the open-source toolkit to run the pipeline yourself:
+
+```bash
+# Clone the toolkit
+git clone https://github.com/SII-WANGZJ/Polymarket_data.git
+cd Polymarket_data
+pip install -r requirements.txt
+
+# Fetch the latest on-chain data and regenerate all files
+./scripts/update_all.sh
+```
+
+<Note>
+  The continuous mode fetches new blocks every 2 seconds and automatically regenerates `trades.parquet`, `quant.parquet`, and `users.parquet` in real time. See the toolkit README for full usage instructions.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Dataset overview" icon="chart-bar" href="/dataset/overview">
+    File sizes, record counts, and pipeline diagram.
+  </Card>
+  <Card title="Schema reference" icon="table" href="/dataset/schema">
+    Full field-by-field documentation for all five Parquet files.
+  </Card>
+</CardGroup>

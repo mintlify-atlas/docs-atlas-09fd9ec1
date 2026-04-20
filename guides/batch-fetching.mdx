@@ -1,0 +1,191 @@
+---
+title: "Fetch historical Polymarket data in batch mode"
+description: "Retrieve a fixed range of Polygon blocks into local parquet files using fetch-onchain, with automatic checkpointing for safe interruption and resumption."
+---
+
+Batch fetching lets you retrieve a fixed set of historical blocks from the Polygon blockchain in one command. You choose the range—last N blocks, a specific start and end block, or a resume from where you left off—and the CLI fetches 100 blocks per batch, writing results to session parquet files as it goes.
+
+## The `fetch-onchain` command
+
+```bash
+python -m polymarket.cli fetch-onchain [OPTIONS]
+```
+
+You must supply exactly one of the three range flags:
+
+| Flag | Description |
+|---|---|
+| `--blocks N` | Fetch the most recent N blocks from the current chain head |
+| `--range START END` | Fetch a specific block range (inclusive) |
+| `--continue` | Resume from the last saved checkpoint in `state.json` |
+
+Additional flags:
+
+| Flag | Description |
+|---|---|
+| `--alchemy` | Use your `ALCHEMY_API_KEY` for faster RPC access |
+| `--merge` | After fetching, merge the session file into the main parquet file |
+
+### Examples
+
+```bash
+# Fetch the last 10 000 blocks
+python -m polymarket.cli fetch-onchain --blocks 10000
+
+# Resume from the last checkpoint
+python -m polymarket.cli fetch-onchain --continue
+
+# Fetch a specific block range
+python -m polymarket.cli fetch-onchain --range 80000000 80010000
+
+# Fetch last 5 000 blocks using Alchemy RPC
+python -m polymarket.cli fetch-onchain --blocks 5000 --alchemy
+```
+
+## Batch size and checkpointing
+
+The fetcher processes blocks in groups of 100 (`BLOCKS_PER_BATCH = 100`). After every 10 batches (roughly 1 000 blocks, covering about 33 minutes of Polygon history), it writes the current block number to `data/state.json` under `fetch_onchain.last_block`.
+
+This means you can interrupt the process at any time with Ctrl+C. The signal handler catches `SIGINT` and `SIGTERM`, waits for the current 100-block batch to finish, then saves progress and closes all writers. The next `--continue` run picks up from where you stopped.
+
+## Checkpoint state file
+
+Progress is stored in `data/state.json`:
+
+```json
+{
+  "fetch_onchain": {
+    "last_block": 68432100,
+    "updated_at": "2026-04-20T14:23:11.400Z"
+  },
+  "fetch_markets": {
+    "last_offset": 12500,
+    "total_markets": 268706,
+    "new_count": 42,
+    "updated_at": "2026-04-20T12:00:00.000Z"
+  }
+}
+```
+
+The `fetch_onchain.last_block` field is read by `--continue` to determine the start of the next run. The CLI also falls back to reading the maximum `block_number` from `orderfilled.parquet` if the state file is absent, so resumption works even after you delete `state.json`.
+
+## Session files and merging
+
+Each run writes to timestamped session files rather than directly overwriting your main dataset:
+
+```
+data/dataset/orderfilled_session_20260420_142311.parquet
+data/dataset/trades_session_20260420_142311.parquet
+data/data_clean/quant_session_20260420_142311.parquet
+data/data_clean/users_session_20260420_142311.parquet
+```
+
+This protects your existing data if the run is interrupted. After a successful fetch, merge session files into the main parquet files with:
+
+```bash
+python -m polymarket.cli merge-sessions
+```
+
+Or pass `--merge` directly to `fetch-onchain` to merge automatically at the end:
+
+```bash
+python -m polymarket.cli fetch-onchain --blocks 10000 --merge
+```
+
+## Failed blocks
+
+If an RPC call fails for a given 100-block batch, the CLI records the range in a text file and moves on rather than retrying indefinitely:
+
+```
+data/failed_blocks_20260420_142311.txt
+```
+
+Each line contains a `START-END` range. At the end of a run, the CLI reports how many batches failed. You can refetch those blocks later:
+
+```bash
+# Refetch a specific range recorded in the failed blocks file
+python -m polymarket.cli fetch-onchain --range 80001200 80001299
+```
+
+Or use the dedicated refetch tool, passing the path to the failed blocks text file:
+
+```bash
+python -m polymarket.tools.refetch_failed_blocks data/failed_blocks_20260420_142311.txt
+```
+
+## Process historical data
+
+For large historical datasets already in `orderfilled.parquet`, use `process-historical` instead of reloading data from the chain. It reads the file in batches of 1 million rows by default and writes `trades`, `quant`, and `users` files without loading everything into memory at once.
+
+```bash
+# Process all historical data
+python -m polymarket.cli process-historical
+
+# Use a smaller batch size to reduce peak memory usage
+python -m polymarket.cli process-historical --batch-size 500000
+
+# Resume an interrupted processing run
+python -m polymarket.cli process-historical --continue
+```
+
+## Full pipeline
+
+<Steps>
+  <Step title="Fetch market metadata">
+    Download market information from the Gamma API. This populates `data/dataset/markets.parquet` and provides the token-to-market mapping needed to link on-chain events to market IDs.
+
+    ```bash
+    python -m polymarket.cli fetch-markets
+    ```
+  </Step>
+
+  <Step title="Fetch on-chain data">
+    Pull `OrderFilled` events from Polygon. Use `--continue` to append only new blocks to your existing dataset.
+
+    ```bash
+    python -m polymarket.cli fetch-onchain --continue
+    ```
+  </Step>
+
+  <Step title="Process into trades">
+    Join raw events with the token mapping to produce `trades.parquet` with market IDs and price fields.
+
+    ```bash
+    python -m polymarket.cli process
+    ```
+  </Step>
+
+  <Step title="Clean data">
+    Generate `quant.parquet` (unified YES perspective) and `users.parquet` (split maker/taker records) from the trades file.
+
+    ```bash
+    python -m polymarket.cli clean
+    ```
+  </Step>
+</Steps>
+
+You can also run the full pipeline in a single command:
+
+<Tabs>
+  <Tab title="Shell script">
+    ```bash
+    ./scripts/update_all.sh
+    ```
+  </Tab>
+  <Tab title="CLI command">
+    ```bash
+    python -m polymarket.cli update
+    ```
+  </Tab>
+  <Tab title="Step by step">
+    ```bash
+    ./scripts/fetch_markets.sh
+    ./scripts/fetch_onchain.sh 5000
+    ./scripts/clean_data.sh
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+`update_all.sh` runs `fetch-markets`, then `fetch-onchain --continue`, then `process`. It does not run `clean` by default. Pass `--clean` to `python -m polymarket.cli update` if you also want to regenerate `quant.parquet` and `users.parquet`.
+</Note>

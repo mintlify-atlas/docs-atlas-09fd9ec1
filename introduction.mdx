@@ -1,0 +1,62 @@
+---
+title: "Polymarket Data: prediction market dataset & toolkit"
+description: "107GB of Polymarket trading data — 1.1 billion records across 268K+ prediction markets, plus a Python toolkit to fetch and process live blockchain data."
+---
+
+Polymarket Data is a comprehensive dataset and open-source toolkit for Polymarket prediction markets. It gives you 1.1 billion on-chain trading records fetched directly from the Polygon blockchain, processed into five analysis-ready Parquet files. Whether you want to download historical data instantly or run your own live pipeline, this project has you covered.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Download the dataset or start fetching live data in under five minutes
+  </Card>
+  <Card title="Dataset overview" icon="database" href="/dataset/overview">
+    Explore all five Parquet files and 107GB of trading records
+  </Card>
+  <Card title="Data schema" icon="table" href="/dataset/schema">
+    Full field-by-field schema for every dataset file
+  </Card>
+  <Card title="Python API" icon="python" href="/api/python-overview">
+    Use the toolkit as a library in your own analysis code
+  </Card>
+</CardGroup>
+
+## What is Polymarket Data
+
+Polymarket Data has two distinct parts that you can use independently or together:
+
+- **The dataset** — a static snapshot of all historical Polymarket trading activity, hosted on HuggingFace. Download one file or all five and start analysing immediately, no setup required.
+- **The toolkit** — a Python package that fetches `OrderFilled` events directly from the Polygon blockchain RPC, decodes them, and outputs the same Parquet files you can also download. Use it to keep your copy of the data current or to reproduce the dataset from scratch.
+
+The toolkit reads from two official Polymarket exchange contracts:
+
+- `CTF_EXCHANGE` — `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E`
+- `NEGRISK_CTF_EXCHANGE` — `0xC5d563A36AE78145C45a50134d48A1215220f80a`
+
+## What's in the dataset
+
+Five files cover different stages of processing, from raw blockchain events through to clean, analysis-ready views:
+
+| File | Size | Records | Best for |
+|------|------|---------|----------|
+| `orderfilled.parquet` | 31 GB | 293.3M | Raw blockchain event analysis |
+| `trades.parquet` | 32 GB | 293.3M | Trade-level analysis with market metadata |
+| `markets.parquet` | 68 MB | 268,706 | Market lookup and metadata joins |
+| `quant.parquet` | 21 GB | 170.3M | Price studies, time-series forecasting |
+| `users.parquet` | 23 GB | 340.6M | PnL calculation, wallet profiling |
+
+**Total: 107 GB, 1.1 billion records** across 268K+ markets.
+
+`quant.parquet` normalises every trade to the YES token perspective and filters out contract-to-contract trades, giving you clean user activity. `users.parquet` splits each trade into two records — one for the maker, one for the taker — so you can query a single user's full history in one pass.
+
+## Who it's for
+
+Polymarket Data is built for:
+
+- **Researchers and academics** studying prediction market dynamics, price discovery, and crowd forecasting
+- **Quantitative analysts** building models on market microstructure, order flow, and pricing
+- **Data scientists** who need a large, well-structured financial time-series dataset for feature engineering or ML training
+- **Developers** who want a ready-made blockchain data pipeline they can run and extend themselves
+
+## Data quality
+
+Every record is sourced directly from Polygon RPC nodes with no third-party intermediaries. The collection covers every block from Polymarket's inception with no gaps. Fields such as `block_number`, `order_hash`, `maker_fee`, `taker_fee`, and `protocol_fee` are included in the raw data — fields that third-party data sources typically omit.

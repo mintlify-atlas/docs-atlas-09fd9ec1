@@ -1,0 +1,299 @@
+---
+title: "LogFetcher, PolygonRpcClient, and GammaApiClient classes"
+description: "Fetch OrderFilled logs from the Polygon blockchain with LogFetcher, and retrieve Polymarket market and token metadata with GammaApiClient."
+---
+
+The `fetchers` module contains two clients: `LogFetcher` (and its underlying `PolygonRpcClient`) for on-chain data, and `GammaApiClient` for market metadata from the Gamma REST API.
+
+```python
+from polymarket import LogFetcher, PolygonRpcClient, GammaApiClient
+```
+
+## Configuration
+
+Two endpoints are used by default. You can override either via environment variables or by editing `polymarket/config.py`.
+
+| Constant | Default value |
+|---|---|
+| `POLYGON_RPC_URL` | `https://polygon-rpc.com` |
+| `GAMMA_API_URL` | `https://gamma-api.polymarket.com` |
+
+<Tip>
+Set `ALCHEMY_API_KEY` in your environment and pass `use_alchemy=True` to `LogFetcher` or `PolygonRpcClient` to use Alchemy's Polygon endpoint (`https://polygon-mainnet.g.alchemy.com/v2/<key>`) for higher rate limits.
+</Tip>
+
+---
+
+## PolygonRpcClient
+
+A thin Web3 wrapper around a Polygon HTTP RPC endpoint. `LogFetcher` uses this internally, but you can also instantiate it directly if you only need block-level data.
+
+### Constructor
+
+```python
+client = PolygonRpcClient(use_alchemy=False)
+```
+
+<ParamField path="use_alchemy" type="boolean" default="False">
+  When `True`, reads `ALCHEMY_API_KEY` from the environment and constructs an Alchemy endpoint URL. Falls back to `polygon-rpc.com` if the key is not set.
+</ParamField>
+
+### Methods
+
+#### `get_latest_block() → int`
+
+Returns the current head block number from the RPC node.
+
+```python
+latest = client.get_latest_block()
+print(latest)  # e.g. 68500000
+```
+
+#### `get_logs(start_block, end_block) → list[dict] | None`
+
+Fetches raw `OrderFilled` log entries for the given block range from both Polymarket exchange contracts.
+
+<ParamField path="start_block" type="integer" required>
+  First block in the range (inclusive).
+</ParamField>
+<ParamField path="end_block" type="integer" required>
+  Last block in the range (inclusive).
+</ParamField>
+
+Returns a list of raw log dicts on success, or `None` if the RPC request fails. An empty list means the request succeeded but no events were emitted in that range.
+
+#### `get_block_timestamp(block_number) → int`
+
+Returns the Unix timestamp for a single block. Results are cached in memory to avoid redundant RPC calls. Raises `RuntimeError` if the block cannot be fetched.
+
+<ParamField path="block_number" type="integer" required>
+  The block to retrieve the timestamp for.
+</ParamField>
+
+#### `batch_get_timestamps(block_numbers) → dict[int, int]`
+
+Fetches timestamps for multiple blocks sequentially. Returns a mapping of `block_number → timestamp`.
+
+<ParamField path="block_numbers" type="integer[]" required>
+  List of block numbers to fetch.
+</ParamField>
+
+#### `estimate_timestamps(block_numbers) → dict[int, int]`
+
+Estimates timestamps for a list of blocks by fetching only the first block's timestamp and extrapolating using the Polygon block time of 2 seconds per block. Use this instead of `batch_get_timestamps` when the list is large.
+
+<ParamField path="block_numbers" type="integer[]" required>
+  List of block numbers to estimate timestamps for.
+</ParamField>
+
+#### `test_connection() → bool`
+
+Returns `True` if the RPC node responds to a `block_number` request, `False` otherwise.
+
+---
+
+## LogFetcher
+
+The primary interface for fetching on-chain data. It wraps `PolygonRpcClient` and adds batching, timestamp resolution, and log parsing.
+
+### Constructor
+
+```python
+fetcher = LogFetcher(use_alchemy=False)
+```
+
+<ParamField path="use_alchemy" type="boolean" default="False">
+  Passed through to the underlying `PolygonRpcClient`. Set to `True` to use an Alchemy endpoint.
+</ParamField>
+
+### Methods
+
+#### `fetch_range_in_batches(start_block, end_block, batch_size) → list[dict] | None`
+
+Fetches logs across a block range by splitting it into sub-ranges of `batch_size` blocks, then concatenating the results. This is the main entry point you should use.
+
+<ParamField path="start_block" type="integer" required>
+  First block in the overall range.
+</ParamField>
+<ParamField path="end_block" type="integer" required>
+  Last block in the overall range.
+</ParamField>
+<ParamField path="batch_size" type="integer" default="100">
+  Number of blocks per sub-request. Defaults to the value of `BLOCKS_PER_BATCH` from `config.py` (100).
+</ParamField>
+
+Returns a list of processed log records on success, or `None` if any RPC sub-request fails. An empty list is a valid success response meaning no events were found in the range.
+
+Each record in the returned list is a dict with these fields:
+
+<ResponseField name="contract" type="string">
+  Contract name: `CTF_EXCHANGE` or `NEGRISK_CTF_EXCHANGE`.
+</ResponseField>
+<ResponseField name="block_number" type="integer">
+  Block number the event was emitted in.
+</ResponseField>
+<ResponseField name="transaction_hash" type="string">
+  Hex-encoded transaction hash.
+</ResponseField>
+<ResponseField name="timestamp" type="integer">
+  Unix timestamp of the block.
+</ResponseField>
+<ResponseField name="topics" type="string[]">
+  List of hex-encoded log topics.
+</ResponseField>
+<ResponseField name="data" type="string">
+  Hex-encoded ABI-encoded non-indexed event parameters.
+</ResponseField>
+<ResponseField name="event_name" type="string">
+  Always `OrderFilled` for records from this fetcher.
+</ResponseField>
+
+#### `fetch_block_range(start_block, end_block) → list[dict] | None`
+
+Fetches and processes logs for a single block sub-range. Called internally by `fetch_range_in_batches`. You can call it directly if you want to process ranges smaller than `batch_size`.
+
+<ParamField path="start_block" type="integer" required>
+  First block in the range.
+</ParamField>
+<ParamField path="end_block" type="integer" required>
+  Last block in the range.
+</ParamField>
+
+#### `get_latest_block() → int`
+
+Delegates to the underlying `PolygonRpcClient.get_latest_block()`.
+
+#### `test_connection() → bool`
+
+Delegates to the underlying `PolygonRpcClient.test_connection()`.
+
+### Example
+
+```python
+from polymarket import LogFetcher
+
+fetcher = LogFetcher()
+
+if not fetcher.test_connection():
+    raise RuntimeError("Cannot reach Polygon RPC")
+
+latest = fetcher.get_latest_block()
+logs = fetcher.fetch_range_in_batches(latest - 1000, latest)
+
+if logs is None:
+    print("RPC request failed")
+else:
+    print(f"Fetched {len(logs)} log records")
+```
+
+---
+
+## GammaApiClient
+
+An HTTP client for the [Gamma API](https://gamma-api.polymarket.com), which provides market metadata including market IDs, outcome token IDs, and resolution status.
+
+### Constructor
+
+```python
+client = GammaApiClient(timeout=60, max_retries=5)
+```
+
+<ParamField path="timeout" type="integer" default="60">
+  HTTP request timeout in seconds.
+</ParamField>
+<ParamField path="max_retries" type="integer" default="5">
+  Number of times to retry a failed or rate-limited request before giving up. Uses exponential back-off for 429 responses.
+</ParamField>
+
+### Methods
+
+#### `get_markets(limit, offset) → list[dict]`
+
+Returns a page of markets ordered by `createdAt` ascending.
+
+<ParamField path="limit" type="integer" default="500">
+  Maximum number of markets to return per page.
+</ParamField>
+<ParamField path="offset" type="integer" default="0">
+  Number of markets to skip (for pagination).
+</ParamField>
+
+Each market dict contains:
+
+<ResponseField name="id" type="string">Market ID.</ResponseField>
+<ResponseField name="question" type="string">Market question or title.</ResponseField>
+<ResponseField name="token1" type="string">CLOB token ID for the first outcome.</ResponseField>
+<ResponseField name="token2" type="string">CLOB token ID for the second outcome.</ResponseField>
+<ResponseField name="answer1" type="string">Name of the first outcome (e.g. `YES`).</ResponseField>
+<ResponseField name="answer2" type="string">Name of the second outcome (e.g. `NO`).</ResponseField>
+<ResponseField name="condition_id" type="string">Polymarket condition ID.</ResponseField>
+<ResponseField name="neg_risk" type="boolean">Whether this is a neg-risk augmented market.</ResponseField>
+<ResponseField name="closed" type="boolean">Whether the market is closed.</ResponseField>
+<ResponseField name="active" type="boolean">Whether the market is active.</ResponseField>
+<ResponseField name="volume" type="string">Cumulative trading volume.</ResponseField>
+<ResponseField name="event_id" type="string">Parent event ID.</ResponseField>
+<ResponseField name="event_title" type="string">Parent event title.</ResponseField>
+
+#### `fetch_all_markets(max_markets) → list[dict]`
+
+Iterates through all pages and returns every market in a single list.
+
+<ParamField path="max_markets" type="integer">
+  Optional cap on the total number of markets returned. Omit to fetch everything.
+</ParamField>
+
+#### `iter_all_markets(batch_size) → Generator[dict]`
+
+A generator version of `fetch_all_markets`. Yields one market at a time, making it suitable for processing large numbers of markets without loading them all into memory.
+
+<ParamField path="batch_size" type="integer" default="500">
+  Number of markets to request per API call.
+</ParamField>
+
+#### `get_market_by_token(token_id) → dict | None`
+
+Looks up a single market by its CLOB token ID. Returns `None` if no market is found.
+
+<ParamField path="token_id" type="string" required>
+  The CLOB token ID to look up.
+</ParamField>
+
+#### `fetch_missing_tokens(token_ids) → list[dict]`
+
+For each token ID in the list, calls `get_market_by_token` and returns the unique markets found. Useful for enriching a trades DataFrame after `find_missing_tokens` identifies unmapped tokens.
+
+<ParamField path="token_ids" type="string[]" required>
+  List of token IDs to resolve.
+</ParamField>
+
+#### `get_token_mapping(markets) → dict[str, dict]`
+
+Builds a `token_id → {market_id, answer}` dict from a list of parsed market dicts (the format returned by `get_markets`). Fetches all markets first if `markets` is `None`.
+
+<ParamField path="markets" type="object[]">
+  Pre-fetched list of market dicts. Pass `None` to fetch all markets automatically.
+</ParamField>
+
+#### `test_connection() → bool`
+
+Returns `True` if the Gamma API returns at least one market, `False` otherwise.
+
+### Example
+
+```python
+from polymarket import GammaApiClient
+
+client = GammaApiClient()
+
+if not client.test_connection():
+    raise RuntimeError("Cannot reach Gamma API")
+
+# Fetch the first page of markets
+markets = client.get_markets(limit=100)
+print(f"Retrieved {len(markets)} markets")
+
+# Look up a specific token
+market = client.get_market_by_token("71321045679252212594626385532706912750332728571942532289631379312455583992563")
+if market:
+    print(market["question"])
+```

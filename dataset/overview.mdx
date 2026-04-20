@@ -1,0 +1,78 @@
+---
+title: "Polymarket dataset: 1.1 billion trading records"
+description: "Five Parquet files totaling 107 GB cover every OrderFilled event on Polymarket, from raw blockchain logs to clean, analysis-ready trade records."
+---
+
+The Polymarket dataset captures the complete on-chain trading history of Polymarket's prediction markets from inception through early 2026. All data originates directly from the Polygon blockchain and the Gamma API — no third-party intermediaries — giving you blockchain-verified records with fields unavailable from any other public source.
+
+The dataset ships in five Parquet files. Two are raw inputs (`orderfilled.parquet` and `markets.parquet`), one is an intermediate join (`trades.parquet`), and two are cleaned, analysis-ready derivatives (`quant.parquet` and `users.parquet`). Together they contain over 1.1 billion records across 268,000+ markets.
+
+## Dataset files
+
+| File | Size | Records | Description |
+|------|------|---------|-------------|
+| `orderfilled.parquet` | 31 GB | 293.3 M | Raw OrderFilled blockchain events from both exchange contracts |
+| `trades.parquet` | 32 GB | 293.3 M | Processed trades joined with market metadata from the Gamma API |
+| `markets.parquet` | 68 MB | 268,706 | Market information, questions, and outcome token details |
+| `quant.parquet` | 21 GB | 170.3 M | Clean trades normalized to the YES token perspective |
+| `users.parquet` | 23 GB | 340.6 M | Per-user records split by maker/taker role with unified BUY direction |
+
+**Total: 107 GB, 1.1 billion records**
+
+## Data pipeline
+
+The diagram below shows how data flows from source to each output file.
+
+```
+Polygon Blockchain (RPC)          Gamma API
+         │                             │
+         ▼                             ▼
+ orderfilled.parquet           markets.parquet
+         │                             │
+         └──────────┬──────────────────┘
+                    ▼
+            trades.parquet
+            (+ market linkage)
+                    │
+         ┌──────────┴──────────┐
+         ▼                     ▼
+  quant.parquet          users.parquet
+  (unified YES           (split maker/taker,
+   perspective,          unified BUY direction,
+   293.3M → 170.3M)      293.3M × 2 → 340.6M)
+```
+
+### Key transformations
+
+**quant.parquet** normalizes every trade to the YES token (token1) perspective so you can compare prices across all markets on a single 0–1 scale. It also removes contract-address trades, keeping only genuine user activity. The result is 170.3 M records filtered from the 293.3 M in `trades.parquet`.
+
+**users.parquet** splits each trade into two independent records — one for the maker and one for the taker — and converts all directions to BUY (selling is represented as a negative `token_amount`). Records are then sorted by user address, which makes wallet-level queries and PnL calculations fast. The expansion produces 340.6 M records (293.3 M × 2, with a small number filtered out).
+
+## Advantages over third-party sources
+
+Direct blockchain access gives you fields that third-party data providers do not expose:
+
+| Field | This dataset | Third-party |
+|-------|-------------|-------------|
+| `block_number` | Yes | No |
+| `contract` name | Yes | No |
+| `maker_fee` / `taker_fee` / `protocol_fee` | Yes | No |
+| `order_hash` | Yes | No |
+| `market_id` (auto-linked) | Yes | Yes |
+| Missing token auto-fill | Yes | Yes |
+
+## Data quality
+
+- **Complete history**: No missing blocks or gaps from Polymarket's inception to the snapshot date.
+- **Verified sources**: All OrderFilled events come from the two official Polymarket exchange contracts (`0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E` and `0xC5d563A36AE78145C45a50134d48A1215220f80a`).
+- **Blockchain-verified**: Cross-checked against Polygon RPC nodes.
+- **Regular updates**: An automated daily pipeline keeps the dataset current. You can also run incremental updates yourself using the open-source toolkit.
+
+<CardGroup cols={2}>
+  <Card title="Schema reference" icon="table" href="/dataset/schema">
+    Full field-by-field documentation for all five Parquet files.
+  </Card>
+  <Card title="Download" icon="download" href="/dataset/download">
+    Download from HuggingFace with the CLI, Python API, or git-lfs.
+  </Card>
+</CardGroup>

@@ -1,0 +1,132 @@
+---
+title: "Python API reference for the Polymarket Data toolkit"
+description: "Install the polymarket package and use its public classes and functions to fetch, decode, and process Polymarket on-chain trading data."
+---
+
+The `polymarket` package gives you programmatic access to every layer of the data pipeline: fetching raw `OrderFilled` logs from the Polygon blockchain, decoding and formatting them into structured events, linking events to market metadata, and cleaning the resulting DataFrames into analysis-ready formats.
+
+## Installation
+
+<Tabs>
+  <Tab title="Editable install">
+    ```bash
+    git clone https://github.com/SII-WANGZJ/Polymarket_data.git
+    cd Polymarket_data
+    pip install -e .
+    ```
+  </Tab>
+  <Tab title="Requirements file">
+    ```bash
+    git clone https://github.com/SII-WANGZJ/Polymarket_data.git
+    cd Polymarket_data
+    pip install -r requirements.txt
+    ```
+  </Tab>
+</Tabs>
+
+## Public exports
+
+All top-level exports are available from the `polymarket` namespace:
+
+```python
+from polymarket import (
+    LogFetcher,
+    PolygonRpcClient,
+    GammaApiClient,
+    EventDecoder,
+    extract_trades,
+    load_token_mapping,
+    find_missing_tokens,
+    clean_trades_df,
+    clean_users_df,
+)
+```
+
+| Symbol | Type | Purpose |
+|---|---|---|
+| `LogFetcher` | class | Fetch `OrderFilled` logs from Polygon RPC in batches |
+| `PolygonRpcClient` | class | Low-level Web3 client for block data and timestamps |
+| `GammaApiClient` | class | Fetch market metadata from the Gamma REST API |
+| `EventDecoder` | class | ABI-decode raw log bytes into structured dicts |
+| `extract_trades` | function | Convert formatted events into a `pd.DataFrame` of trades |
+| `load_token_mapping` | function | Load a `token_id → market info` dict from `markets.parquet` |
+| `find_missing_tokens` | function | Identify token IDs in trade data with no market mapping |
+| `clean_trades_df` | function | Normalize trades to the YES token perspective (quant data) |
+| `clean_users_df` | function | Split maker/taker rows and unify direction (users data) |
+
+## End-to-end example
+
+The snippet below follows the complete pipeline from raw blocks to a saved Parquet file.
+
+<Steps>
+  <Step title="Fetch on-chain logs">
+    ```python
+    from polymarket import LogFetcher
+
+    fetcher = LogFetcher()
+    logs = fetcher.fetch_range_in_batches(start_block, end_block)
+    ```
+  </Step>
+  <Step title="Decode events">
+    ```python
+    from polymarket import EventDecoder
+
+    decoder = EventDecoder()
+    decoded = decoder.decode_batch(logs)
+    events = decoder.format_batch(decoded)
+    ```
+  </Step>
+  <Step title="Load token mapping and extract trades">
+    ```python
+    from polymarket import load_token_mapping, extract_trades
+
+    token_mapping = load_token_mapping()
+    trades_df = extract_trades(events, token_mapping)
+    ```
+  </Step>
+  <Step title="Save to Parquet">
+    ```python
+    trades_df.to_parquet('trades.parquet')
+    ```
+  </Step>
+</Steps>
+
+## Architecture overview
+
+The package is organized into three layers that you work through in sequence:
+
+```
+Polygon RPC                  Gamma API
+     ↓                           ↓
+ fetchers/rpc.py          fetchers/gamma.py
+     ↓                           ↓
+ processors/decoder.py           ↓
+     ↓                           ↓
+ processors/trades.py  ←─────────┘
+     ↓
+ processors/cleaner.py
+     ↓              ↓
+ quant.parquet   users.parquet
+```
+
+- **Fetchers** — `LogFetcher` and `GammaApiClient` pull raw data from external sources.
+- **Processors** — `EventDecoder`, `extract_trades`, and the cleaner functions transform raw data into structured DataFrames.
+- **Tools** — Utility scripts for continuous fetching, merging Parquet files, sorting, and recovering failed blocks.
+
+<Note>
+Set the `ALCHEMY_API_KEY` environment variable to use Alchemy's Polygon endpoint instead of the default `polygon-rpc.com`. Pass `use_alchemy=True` to `LogFetcher` or `PolygonRpcClient` to activate it.
+</Note>
+
+## Explore the API
+
+<CardGroup cols={3}>
+  <Card title="Fetchers" icon="download" href="/api/fetchers">
+    `LogFetcher`, `PolygonRpcClient`, and `GammaApiClient` — fetch blockchain logs and market metadata.
+  </Card>
+  <Card title="Processors" icon="gear" href="/api/processors">
+    `EventDecoder`, `extract_trades`, `load_token_mapping`, `clean_trades_df`, and `clean_users_df`.
+  </Card>
+  <Card title="Tools" icon="wrench" href="/api/tools">
+    Continuous fetch, merge and sort Parquet files, and refetch failed blocks.
+  </Card>
+</CardGroup>

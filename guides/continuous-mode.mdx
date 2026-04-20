@@ -1,0 +1,99 @@
+---
+title: "Run continuous real-time data fetching from Polygon"
+description: "Keep your Polymarket dataset current by running a background process that streams new blocks from Polygon and writes four parquet files in real time."
+---
+
+Continuous mode runs an always-on background process that monitors the Polygon blockchain and writes new trade data to disk as blocks arrive. It switches automatically between two speeds depending on how far behind you are, so it catches up quickly after downtime and then tracks new blocks in real time.
+
+## How it works
+
+The fetcher operates in two modes, switching automatically based on how far your local data trails the chain head:
+
+- **Batch mode** — when you are 100 or more blocks behind, the process fetches 100 blocks per iteration with a short 0.5 s pause between batches. This lets it catch up quickly after a restart or gap.
+- **Real-time mode** — once you are within 100 blocks of the chain head, the process fetches one block at a time and waits 2 seconds between each fetch, matching Polygon's ~2 s block time.
+
+Every block range that contains `OrderFilled` events is decoded and written immediately to four parquet files. When there is nothing to write for a given block, the fetcher simply advances the counter and continues.
+
+## Output files
+
+Each session produces four timestamped parquet files named `<type>_YYYYMMDD_HHMMSS.parquet`. The timestamp is fixed when you start the process, so all four files from a single run share the same suffix.
+
+| File | Contents |
+|---|---|
+| `orderfilled_<ts>.parquet` | Raw decoded `OrderFilled` blockchain events |
+| `trades_<ts>.parquet` | Processed trades with market metadata |
+| `quant_<ts>.parquet` | Clean market data normalized to YES token perspective |
+| `users_<ts>.parquet` | Split maker/taker records with unified buy direction |
+
+Files are written to `data/continuous/` by default. CSV previews of the most recent 1 000 rows are kept fresh in `data/latest_result/` throughout the session.
+
+<Warning>
+Parquet files accumulate quickly. A busy market day can add several gigabytes across the four files. Monitor your available disk space if you leave continuous mode running for days at a time.
+</Warning>
+
+## Start, monitor, and stop
+
+<Steps>
+  <Step title="Start the background process">
+    Run the start script from the project root. It launches the fetcher under `nohup`, writes the process ID to `logs/continuous_fetch.pid`, and returns immediately.
+
+    ```bash
+    ./scripts/continuous_start.sh
+    ```
+
+    You will see output similar to:
+
+    ```
+    ✓ Continuous fetching started
+      Process ID: 12345
+      Log file: logs/continuous_fetch.log
+    ```
+  </Step>
+
+  <Step title="Watch the logs">
+    Follow the log file to confirm the process is running and see which blocks are being processed.
+
+    ```bash
+    tail -f logs/continuous_fetch.log
+    ```
+
+    In batch mode the log shows the block range and how many blocks you are behind. In real-time mode it prints each individual block number and the current chain head.
+  </Step>
+
+  <Step title="Stop gracefully">
+    Send SIGTERM to the process via the stop script. The script waits up to 30 seconds for a clean shutdown before force-killing if necessary.
+
+    ```bash
+    ./scripts/continuous_stop.sh
+    ```
+
+    The fetcher catches SIGTERM and SIGINT, finishes writing the current batch, closes all four `ParquetWriter` instances, and exits. This ensures no partially written row groups are left open.
+  </Step>
+</Steps>
+
+## Graceful shutdown
+
+The process registers handlers for both `SIGTERM` and `SIGINT` (Ctrl+C). When either signal arrives, it sets an internal `should_stop` flag. The main loop checks this flag at the top of each iteration, so the process always completes the block range it has already started fetching before it begins shutdown. All four writers are flushed and closed in the `finally` block, making every completed session file a valid, readable parquet file.
+
+If the stop script's 30-second wait expires, it falls back to `kill -9`. In that case the current session's parquet files may be incomplete. You can use `python -m polymarket.tools.merge_parquet` to inspect or recover partial files.
+
+## Resume after restart
+
+The fetcher writes `data/continuous/continuous_state.json` after each successful batch, recording the last processed block number. On the next start it reads this file and resumes from the next block, so you never re-fetch or skip blocks across restarts. New session files get a fresh timestamp suffix, and you can merge them later with:
+
+```bash
+python -m polymarket.tools.merge_parquet \
+  data/continuous/quant_*.parquet \
+  -o data/dataset/quant.parquet
+```
+
+## Use Alchemy for faster RPC
+
+<Tip>
+If you have an Alchemy account, set `ALCHEMY_API_KEY` in your environment before starting. The fetcher will use the Polygon Mainnet Alchemy endpoint instead of the public `polygon-rpc.com` node, which gives lower latency and higher rate limits during batch catch-up.
+
+```bash
+export ALCHEMY_API_KEY=your_key_here
+./scripts/continuous_start.sh
+```
+</Tip>

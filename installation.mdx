@@ -1,0 +1,147 @@
+---
+title: "Install and configure the Polymarket Data toolkit"
+description: "Install the Python toolkit to fetch live Polymarket data from the Polygon blockchain. Requires Python 3.12+ and takes under two minutes to set up."
+---
+
+The Polymarket Data toolkit is a Python package that fetches `OrderFilled` events from the Polygon blockchain, decodes them, and writes five analysis-ready Parquet files. If you only need the pre-built dataset, you can [download it from HuggingFace](/quickstart) instead.
+
+<Warning>
+  Python 3.12 or later is required. The toolkit uses features and type annotations that are not available in earlier Python versions.
+</Warning>
+
+## Requirements
+
+- Python 3.12+
+- pip
+- Git (to clone the repository)
+- An internet connection to reach the Polygon RPC endpoint
+
+## Install methods
+
+<Tabs>
+  <Tab title="Development install">
+    Install the package in editable mode. Use this if you want to modify the source code or contribute to the project.
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/SII-WANGZJ/Polymarket_data.git
+        cd Polymarket_data
+        ```
+      </Step>
+      <Step title="Install in editable mode">
+        ```bash
+        pip install -e .
+        ```
+
+        This installs the `polymarket` package and its dependencies, and registers the `polymarket` CLI entry point.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Dependencies only">
+    Install only the required dependencies without registering the package. Use this if you want to run scripts directly without installing the package.
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/SII-WANGZJ/Polymarket_data.git
+        cd Polymarket_data
+        ```
+      </Step>
+      <Step title="Install dependencies">
+        ```bash
+        pip install -r requirements.txt
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Dependencies
+
+The following packages are installed automatically:
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `web3` | >=6.0.0 | Polygon RPC interaction for blockchain data fetching |
+| `requests` | >=2.28.0 | HTTP requests to the Gamma API for market metadata |
+| `pandas` | >=2.0.0 | Data processing and transformation |
+| `pyarrow` | >=12.0.0 | Parquet file reading and writing |
+| `eth-abi` | >=4.0.0 | ABI encoding and decoding for Ethereum event data |
+
+## Environment variables
+
+<Note>
+  All environment variables are optional. The toolkit works out of the box using the public Polygon RPC endpoint.
+</Note>
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ALCHEMY_API_KEY` | No | Alchemy API key for faster, more reliable RPC access |
+
+To use Alchemy, export the key before running any commands:
+
+```bash
+export ALCHEMY_API_KEY=your_key_here
+```
+
+When set, the toolkit automatically switches from the public `https://polygon-rpc.com` endpoint to your Alchemy endpoint. This is useful when fetching large block ranges or running continuous mode.
+
+## Directory structure
+
+After cloning and installing, the repository has the following layout:
+
+```
+Polymarket_data/
+├── polymarket/          # Python package
+│   ├── cli/             # CLI entry points
+│   ├── fetchers/        # RPC and Gamma API clients
+│   ├── processors/      # Decoder, trade extractor, cleaner
+│   └── tools/           # Merge, sort, continuous fetch utilities
+├── scripts/             # Shell script wrappers
+├── data/                # Local data storage (gitignored, created on first run)
+├── logs/                # Log files (gitignored, created on first run)
+├── requirements.txt
+├── setup.py
+└── README.md
+```
+
+- `polymarket/cli/` — command-line interface entry points
+- `polymarket/fetchers/` — RPC and Gamma API data fetchers
+- `polymarket/processors/` — event decoder, trade extractor, and data cleaner
+- `polymarket/tools/` — utilities for merging, sorting, and continuous fetching
+- `scripts/` — shell scripts for common workflows
+- `data/` — local data storage for Parquet files (created on first run, gitignored)
+- `logs/` — log files from continuous mode (created on first run, gitignored)
+
+## Verify the installation
+
+Run this one-liner to confirm the package installed correctly:
+
+```bash
+python -c "from polymarket import LogFetcher; print('OK')"
+```
+
+If the install succeeded, you will see:
+
+```
+OK
+```
+
+If you see an `ImportError`, check that you are using Python 3.12+ and that `pip install` completed without errors:
+
+```bash
+python --version
+pip show polymarket-data
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Fetch your first blocks or download the pre-built dataset
+  </Card>
+  <Card title="Continuous mode" icon="bolt" href="/guides/continuous-mode">
+    Run the live pipeline to keep your data synced automatically
+  </Card>
+</CardGroup>

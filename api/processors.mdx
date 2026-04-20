@@ -1,0 +1,334 @@
+---
+title: "EventDecoder, extract_trades, and cleaner functions"
+description: "Decode raw OrderFilled logs into structured events, extract trades with market linkage, and clean DataFrames into quant and users formats."
+---
+
+The `processors` module turns raw log records into analysis-ready DataFrames. It is split into three files: `decoder.py` for ABI decoding, `trades.py` for market linkage and trade extraction, and `cleaner.py` for normalization.
+
+```python
+from polymarket import (
+    EventDecoder,
+    extract_trades,
+    load_token_mapping,
+    find_missing_tokens,
+    clean_trades_df,
+    clean_users_df,
+)
+```
+
+---
+
+## EventDecoder
+
+Decodes the raw `topics` and `data` bytes of an `OrderFilled` log into human-readable fields.
+
+### Constructor
+
+```python
+decoder = EventDecoder()
+```
+
+`EventDecoder` takes no parameters. It initializes a local `Web3` instance used only for ABI decoding (no network connection required).
+
+### Methods
+
+#### `decode(record) → dict`
+
+Decodes a single log record in-place. The decoded parameters are added under the `decoded_params` key, and `event_name` is set to `OrderFilled`.
+
+<ParamField path="record" type="object" required>
+  A log record dict as returned by `LogFetcher.fetch_range_in_batches`. Must contain `topics` (list of hex strings) and `data` (hex string).
+</ParamField>
+
+#### `decode_batch(records) → list[dict]`
+
+Calls `decode` on every record and returns the list. This is the normal entry point when processing multiple logs.
+
+<ParamField path="records" type="object[]" required>
+  List of raw log record dicts from `LogFetcher`.
+</ParamField>
+
+#### `format_event(record) → dict`
+
+Converts a decoded record (output of `decode`) into a clean output dict with normalized field names. Asset IDs are converted to strings because they are 256-bit integers that exceed Python's `int64` range.
+
+<ParamField path="record" type="object" required>
+  A decoded log record (must already have `decoded_params`).
+</ParamField>
+
+Returns a dict with these fields:
+
+<ResponseField name="transaction_hash" type="string">Hex transaction hash.</ResponseField>
+<ResponseField name="block_number" type="integer">Block number.</ResponseField>
+<ResponseField name="log_index" type="integer">Log index within the transaction.</ResponseField>
+<ResponseField name="timestamp" type="integer">Unix timestamp of the block.</ResponseField>
+<ResponseField name="datetime" type="string">
+  Formatted datetime string (`YYYY-MM-DD HH:MM:SS`). Only present when the timestamp is a valid Unix value.
+</ResponseField>
+<ResponseField name="contract" type="string">`CTF_EXCHANGE` or `NEGRISK_CTF_EXCHANGE`.</ResponseField>
+<ResponseField name="event_name" type="string">Always `OrderFilled`.</ResponseField>
+<ResponseField name="order_hash" type="string">The on-chain order hash (bytes32 as hex).</ResponseField>
+<ResponseField name="maker" type="string">Maker wallet address (checksum format).</ResponseField>
+<ResponseField name="taker" type="string">Taker wallet address (checksum format).</ResponseField>
+<ResponseField name="maker_asset_id" type="string">Maker's asset ID as a decimal string.</ResponseField>
+<ResponseField name="taker_asset_id" type="string">Taker's asset ID as a decimal string.</ResponseField>
+<ResponseField name="maker_amount_filled" type="integer">Maker's filled amount in wei (× 10⁻⁶ USDC).</ResponseField>
+<ResponseField name="taker_amount_filled" type="integer">Taker's filled amount in wei.</ResponseField>
+<ResponseField name="maker_fee" type="integer">Maker fee in wei.</ResponseField>
+<ResponseField name="taker_fee" type="integer">Taker fee in wei.</ResponseField>
+<ResponseField name="protocol_fee" type="integer">Protocol fee in wei.</ResponseField>
+
+#### `format_batch(records) → list[dict]`
+
+Calls `format_event` on every decoded record. Use this after `decode_batch`.
+
+<ParamField path="records" type="object[]" required>
+  List of decoded records (output of `decode_batch`).
+</ParamField>
+
+### Example
+
+```python
+from polymarket import LogFetcher, EventDecoder
+
+fetcher = LogFetcher()
+logs = fetcher.fetch_range_in_batches(68_000_000, 68_001_000)
+
+decoder = EventDecoder()
+decoded = decoder.decode_batch(logs)
+events = decoder.format_batch(decoded)
+
+print(events[0]["maker"], events[0]["price"])
+```
+
+---
+
+## load_token_mapping
+
+```python
+from polymarket import load_token_mapping
+
+token_mapping = load_token_mapping(markets_file=None)
+```
+
+Reads `markets.parquet` (default: `data/dataset/markets.parquet`) and builds a dict mapping every CLOB token ID to its market information. Both `token1` and `token2` for each market are indexed.
+
+<ParamField path="markets_file" type="string | Path">
+  Path to a Parquet file containing market metadata. Defaults to `config.MARKETS_FILE` when `None`.
+</ParamField>
+
+Returns an empty dict (and logs a warning) if the file does not exist.
+
+Return type: `dict[str, dict]`
+
+Each value in the returned dict:
+
+<ResponseField name="market_id" type="string">Polymarket market ID.</ResponseField>
+<ResponseField name="condition_id" type="string">Polymarket condition ID.</ResponseField>
+<ResponseField name="side" type="string">`token1` or `token2`.</ResponseField>
+<ResponseField name="question" type="string">Market question (truncated to 100 characters).</ResponseField>
+<ResponseField name="event_id" type="string">Parent event ID.</ResponseField>
+<ResponseField name="event_slug" type="string">Parent event slug.</ResponseField>
+<ResponseField name="event_title" type="string">Parent event title (truncated to 100 characters).</ResponseField>
+
+---
+
+## extract_trades
+
+```python
+from polymarket import extract_trades
+
+trades_df = extract_trades(events, token_mapping=None)
+```
+
+Filters formatted events to only `OrderFilled` entries from the two Polymarket exchange contracts, resolves the non-USDC asset ID to market metadata, normalizes amounts from wei to USDC, and returns a DataFrame.
+
+<ParamField path="events" type="object[]" required>
+  List of formatted event dicts (output of `EventDecoder.format_batch`).
+</ParamField>
+<ParamField path="token_mapping" type="object">
+  Dict returned by `load_token_mapping`. When provided, each trade row is enriched with `market_id`, `question`, and related fields. Omit to get trades without market linkage.
+</ParamField>
+
+Returns an empty `pd.DataFrame` if no matching events are found.
+
+Output schema:
+
+<ResponseField name="timestamp" type="integer">Unix timestamp.</ResponseField>
+<ResponseField name="datetime" type="string">Formatted datetime string.</ResponseField>
+<ResponseField name="block_number" type="integer">Block number.</ResponseField>
+<ResponseField name="transaction_hash" type="string">Transaction hash.</ResponseField>
+<ResponseField name="contract" type="string">Exchange contract name.</ResponseField>
+<ResponseField name="market_id" type="string">Linked market ID (empty if token not in mapping).</ResponseField>
+<ResponseField name="condition_id" type="string">Linked condition ID.</ResponseField>
+<ResponseField name="question" type="string">Market question.</ResponseField>
+<ResponseField name="nonusdc_side" type="string">`token1` or `token2` — which side held the outcome token.</ResponseField>
+<ResponseField name="maker" type="string">Maker wallet address.</ResponseField>
+<ResponseField name="taker" type="string">Taker wallet address.</ResponseField>
+<ResponseField name="maker_direction" type="string">`BUY` or `SELL`.</ResponseField>
+<ResponseField name="taker_direction" type="string">`BUY` or `SELL`.</ResponseField>
+<ResponseField name="price" type="float">Trade price in the 0–1 range (rounded to 6 decimal places).</ResponseField>
+<ResponseField name="usd_amount" type="float">USDC amount (rounded to 2 decimal places).</ResponseField>
+<ResponseField name="token_amount" type="float">Outcome token amount (rounded to 2 decimal places).</ResponseField>
+<ResponseField name="asset_id" type="string">The non-USDC asset ID used to look up the market.</ResponseField>
+<ResponseField name="order_hash" type="string">On-chain order hash.</ResponseField>
+
+---
+
+## find_missing_tokens
+
+```python
+from polymarket import find_missing_tokens
+
+missing = find_missing_tokens(trades_df, token_mapping)
+```
+
+Compares the `asset_id` column of a trades DataFrame against the keys in `token_mapping` and returns the set of token IDs that have no mapping.
+
+<ParamField path="trades_df" type="pd.DataFrame" required>
+  DataFrame returned by `extract_trades`. Must contain an `asset_id` column.
+</ParamField>
+<ParamField path="token_mapping" type="object" required>
+  Token mapping dict returned by `load_token_mapping`.
+</ParamField>
+
+Returns `set[str]` — the token IDs present in trades but absent from the mapping.
+
+Use the result with `GammaApiClient.fetch_missing_tokens` to retrieve the missing market metadata, then merge it into your mapping and re-run `extract_trades`.
+
+```python
+from polymarket import find_missing_tokens, GammaApiClient, load_token_mapping, extract_trades
+
+token_mapping = load_token_mapping()
+trades_df = extract_trades(events, token_mapping)
+
+missing = find_missing_tokens(trades_df, token_mapping)
+if missing:
+    gamma = GammaApiClient()
+    new_markets = gamma.fetch_missing_tokens(list(missing))
+    # Build a supplemental mapping and merge
+    supplement = gamma.get_token_mapping(new_markets)
+    token_mapping.update(supplement)
+    trades_df = extract_trades(events, token_mapping)
+```
+
+---
+
+## clean_trades_df
+
+```python
+from polymarket import clean_trades_df
+
+quant_df = clean_trades_df(trades_df)
+```
+
+Produces the **quant** dataset: contract-address trades are filtered out, and all prices are normalized to the YES (`token1`) perspective. This is the in-memory equivalent of writing `quant.parquet`.
+
+<ParamField path="trades_df" type="pd.DataFrame" required>
+  DataFrame returned by `extract_trades`.
+</ParamField>
+
+Returns an empty `pd.DataFrame` if all rows are filtered out.
+
+Transformations applied:
+- Rows with `NaN` price are dropped.
+- Rows where `taker` is one of the two Polymarket exchange contract addresses are dropped (these are contract-to-contract trades, not user trades).
+- For rows where `nonusdc_side == 'token2'`, price is flipped to `1 - price` so all rows reflect the YES token value.
+
+Output schema (subset of `trades_df` with `nonusdc_side` normalized to `token1`):
+
+<ResponseField name="transaction_hash" type="string">Transaction hash.</ResponseField>
+<ResponseField name="block_number" type="integer">Block number.</ResponseField>
+<ResponseField name="datetime" type="string">Datetime string.</ResponseField>
+<ResponseField name="market_id" type="string">Market identifier.</ResponseField>
+<ResponseField name="maker" type="string">Maker wallet address.</ResponseField>
+<ResponseField name="taker" type="string">Taker wallet address.</ResponseField>
+<ResponseField name="token_amount" type="float">Amount of YES tokens traded.</ResponseField>
+<ResponseField name="usd_amount" type="float">USD value of the trade.</ResponseField>
+<ResponseField name="price" type="float">Trade price normalized to the YES token (0–1).</ResponseField>
+
+---
+
+## clean_users_df
+
+```python
+from polymarket import clean_users_df
+
+users_df = clean_users_df(trades_df)
+```
+
+Produces the **users** dataset: each trade row is split into two rows (one for the maker, one for the taker), all directions are unified to `BUY` (sell trades get a negative `token_amount`), and the same contract-address and NaN-price filters as `clean_trades_df` are applied. This is the in-memory equivalent of writing `users.parquet`.
+
+<ParamField path="trades_df" type="pd.DataFrame" required>
+  DataFrame returned by `extract_trades`.
+</ParamField>
+
+Returns an empty `pd.DataFrame` if all rows are filtered out.
+
+Transformations applied:
+1. Rows with `NaN` price are dropped.
+2. Rows where `taker` is a Polymarket contract address are dropped.
+3. Each remaining row is duplicated into a maker row and a taker row.
+4. Prices for `token2` rows are flipped to `1 - price`.
+5. `SELL` directions are converted to `BUY` with `token_amount` negated (negative = selling).
+
+Output schema:
+
+<ResponseField name="timestamp" type="integer">Unix timestamp.</ResponseField>
+<ResponseField name="datetime" type="string">Datetime string.</ResponseField>
+<ResponseField name="block_number" type="integer">Block number.</ResponseField>
+<ResponseField name="transaction_hash" type="string">Transaction hash.</ResponseField>
+<ResponseField name="event_id" type="string">Parent event ID.</ResponseField>
+<ResponseField name="market_id" type="string">Market identifier.</ResponseField>
+<ResponseField name="condition_id" type="string">Condition ID.</ResponseField>
+<ResponseField name="user" type="string">Wallet address of this participant.</ResponseField>
+<ResponseField name="role" type="string">`maker` or `taker`.</ResponseField>
+<ResponseField name="price" type="float">Trade price normalized to the YES token (0–1).</ResponseField>
+<ResponseField name="token_amount" type="float">Signed token amount: positive = bought, negative = sold.</ResponseField>
+<ResponseField name="usd_amount" type="float">USD value of the trade.</ResponseField>
+
+---
+
+## Batch file variants
+
+For processing large Parquet files on disk rather than in-memory DataFrames, the `processors` module also exports `clean_trades` and `clean_users`. These read from and write to Parquet files in configurable batch sizes, with a final global sort pass.
+
+```python
+from polymarket.processors.cleaner import clean_trades, clean_users
+from pathlib import Path
+
+stats = clean_trades(
+    input_path=Path("data/dataset/trades.parquet"),
+    output_path=Path("data/data_clean/quant.parquet"),
+    batch_size=5_000_000,
+)
+print(stats)
+# {'input_rows': 293300000, 'output_rows': 170300000, 'retention_ratio': 0.581, 'elapsed_seconds': 142.3}
+
+stats = clean_users(
+    input_path=Path("data/dataset/trades.parquet"),
+    output_path=Path("data/data_clean/users.parquet"),
+    batch_size=5_000_000,
+)
+print(stats)
+# {'input_rows': 293300000, 'output_rows': 340600000, 'expansion_ratio': 1.16, 'elapsed_seconds': 198.7}
+```
+
+<ParamField path="input_path" type="Path" required>
+  Path to the `trades.parquet` file to read.
+</ParamField>
+<ParamField path="output_path" type="Path" required>
+  Path where the cleaned Parquet file will be written.
+</ParamField>
+<ParamField path="batch_size" type="integer" default="5000000">
+  Number of rows to process per batch.
+</ParamField>
+<ParamField path="test_rows" type="integer">
+  If set, only the first N rows of the input are processed. Useful for quick validation.
+</ParamField>
+
+Both functions return a stats dict. `clean_trades` includes `retention_ratio` (fraction of rows kept); `clean_users` includes `expansion_ratio` (output rows ÷ input rows, typically ~2× due to the maker/taker split).
+
+<Note>
+`clean_trades` sorts the output by `block_number` and `clean_users` sorts by `user, timestamp`. The sort uses DuckDB if installed, then Polars, then PyArrow as fallback.
+</Note>
